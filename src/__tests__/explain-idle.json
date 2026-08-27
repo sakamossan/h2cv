@@ -1,0 +1,234 @@
+{
+  "agent": "claude",
+  "cached_remote_version": "2026.07.13.1",
+  "evaluated_rules": [
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 0,
+        "contains": [],
+        "line_regex": [],
+        "not_count": 0,
+        "regex": ["^[\\x{2800}-\\x{28FF}] "],
+        "region_bytes": 15,
+        "region_preview": "✳ Claude Code"
+      },
+      "id": "osc_title_working",
+      "matched": false,
+      "priority": 1100,
+      "region": "osc_title",
+      "state": "working"
+    },
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 0,
+        "contains": [],
+        "line_regex": ["^\\s*/btw(?:\\s|$)", "(?i)esc to close\\s*$"],
+        "not_count": 0,
+        "regex": [],
+        "region_bytes": 968,
+        "region_preview": "❯\n───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  devbox:app-talk/sa..."
+      },
+      "id": "btw_overlay_working",
+      "matched": false,
+      "priority": 975,
+      "region": "bottom_non_empty_lines(5)",
+      "state": "working"
+    },
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 5,
+        "contains": ["showing detailed transcript"],
+        "line_regex": [],
+        "not_count": 0,
+        "regex": [],
+        "region_bytes": 330,
+        "region_preview": "  devbox:app-talk/app#⎇ wt/app-talk(+0/-0)                                                                                                                                                        /rc\n  Fable 5 (high) | Ctx:0.0% | ..."
+      },
+      "id": "transcript_viewer",
+      "matched": false,
+      "priority": 1000,
+      "region": "bottom_non_empty_lines(3)",
+      "state": "unknown"
+    },
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 5,
+        "contains": ["enter to select", "esc to cancel"],
+        "line_regex": [],
+        "not_count": 0,
+        "regex": [],
+        "region_bytes": 330,
+        "region_preview": "  devbox:app-talk/app#⎇ wt/app-talk(+0/-0)                                                                                                                                                        /rc\n  Fable 5 (high) | Ctx:0.0% | ..."
+      },
+      "id": "live_blocked_form",
+      "matched": false,
+      "priority": 980,
+      "region": "after_last_horizontal_rule",
+      "state": "blocked"
+    },
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 0,
+        "contains": ["run a dynamic workflow?", "esc to cancel"],
+        "line_regex": [],
+        "not_count": 0,
+        "regex": [],
+        "region_bytes": 1772,
+        "region_preview": " ▐▛███▜▌   Claude Code v2.1.220\n▝▜█████▛▘  Fable 5 · Claude Max\n  ▘▘ ▝▝    ~/worktrees/proj/app-talk/app\n\n\n❯ /clear\n\n─────────────────────────────────────────────────────────────────────────────────────────────────────────────────..."
+      },
+      "id": "dynamic_workflow_prompt",
+      "matched": false,
+      "priority": 980,
+      "region": "whole_recent",
+      "state": "blocked"
+    },
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 0,
+        "contains": [],
+        "line_regex": ["^\\s*❯"],
+        "not_count": 5,
+        "regex": [],
+        "region_bytes": 4,
+        "region_preview": "❯\n"
+      },
+      "id": "live_prompt_box",
+      "matched": true,
+      "priority": 950,
+      "region": "prompt_box_body",
+      "state": "idle"
+    },
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 0,
+        "contains": [
+          "select model",
+          "enter to set as default",
+          "esc to cancel"
+        ],
+        "line_regex": [],
+        "not_count": 2,
+        "regex": [],
+        "region_bytes": 1772,
+        "region_preview": " ▐▛███▜▌   Claude Code v2.1.220\n▝▜█████▛▘  Fable 5 · Claude Max\n  ▘▘ ▝▝    ~/worktrees/proj/app-talk/app\n\n\n❯ /clear\n\n─────────────────────────────────────────────────────────────────────────────────────────────────────────────────..."
+      },
+      "id": "model_picker_menu",
+      "matched": false,
+      "priority": 900,
+      "region": "whole_recent",
+      "state": "unknown"
+    },
+    {
+      "evidence": {
+        "all_count": 1,
+        "any_count": 5,
+        "contains": ["do you want to proceed?"],
+        "line_regex": [],
+        "not_count": 0,
+        "regex": [],
+        "region_bytes": 1772,
+        "region_preview": " ▐▛███▜▌   Claude Code v2.1.220\n▝▜█████▛▘  Fable 5 · Claude Max\n  ▘▘ ▝▝    ~/worktrees/proj/app-talk/app\n\n\n❯ /clear\n\n─────────────────────────────────────────────────────────────────────────────────────────────────────────────────..."
+      },
+      "id": "bash_permission_prompt",
+      "matched": false,
+      "priority": 850,
+      "region": "whole_recent",
+      "state": "blocked"
+    },
+    {
+      "evidence": {
+        "all_count": 1,
+        "any_count": 0,
+        "contains": ["do you want to proceed?", "esc to cancel"],
+        "line_regex": [],
+        "not_count": 0,
+        "regex": [],
+        "region_bytes": 330,
+        "region_preview": "  devbox:app-talk/app#⎇ wt/app-talk(+0/-0)                                                                                                                                                        /rc\n  Fable 5 (high) | Ctx:0.0% | ..."
+      },
+      "id": "generic_permission_prompt",
+      "matched": false,
+      "priority": 840,
+      "region": "after_last_horizontal_rule",
+      "state": "blocked"
+    },
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 9,
+        "contains": [],
+        "line_regex": [],
+        "not_count": 1,
+        "regex": [],
+        "region_bytes": 1772,
+        "region_preview": " ▐▛███▜▌   Claude Code v2.1.220\n▝▜█████▛▘  Fable 5 · Claude Max\n  ▘▘ ▝▝    ~/worktrees/proj/app-talk/app\n\n\n❯ /clear\n\n─────────────────────────────────────────────────────────────────────────────────────────────────────────────────..."
+      },
+      "id": "legacy_no_prompt_blocker",
+      "matched": false,
+      "priority": 300,
+      "region": "whole_recent",
+      "state": "blocked"
+    },
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 0,
+        "contains": [],
+        "line_regex": [],
+        "not_count": 0,
+        "regex": ["^\\x{2733} "],
+        "region_bytes": 15,
+        "region_preview": "✳ Claude Code"
+      },
+      "id": "osc_title_idle",
+      "matched": true,
+      "priority": 250,
+      "region": "osc_title",
+      "state": "idle"
+    },
+    {
+      "evidence": {
+        "all_count": 0,
+        "any_count": 0,
+        "contains": [],
+        "line_regex": [],
+        "not_count": 0,
+        "regex": ["^4;0"],
+        "region_bytes": 0,
+        "region_preview": ""
+      },
+      "id": "osc_progress_idle",
+      "matched": false,
+      "priority": 250,
+      "region": "osc_progress",
+      "state": "idle"
+    }
+  ],
+  "fallback_reason": null,
+  "local_override_shadowing_remote": false,
+  "manifest_source": "remote:/home/user/.local/state/herdr/agent-detection/remote/claude.toml",
+  "manifest_version": "2026.07.13.1",
+  "matched_rule": {
+    "id": "live_prompt_box",
+    "priority": 950,
+    "region": "prompt_box_body",
+    "state": "idle"
+  },
+  "remote_update_error": null,
+  "remote_update_status": "current",
+  "screen_detection_skipped": false,
+  "skip_state_update": false,
+  "skipped_update_reason": null,
+  "state": "idle",
+  "visible_blocker": false,
+  "visible_idle": true,
+  "visible_working": false,
+  "warning": null
+}

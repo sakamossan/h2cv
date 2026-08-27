@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "incremental": false,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ESNext"],
+    "outDir": "./dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "inlineSourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["./src/**/*", "./bin/**/*"],
+  "exclude": [
+    "node_modules",
+    "./src/setup-vitest.ts",
+    "./src/**/__tests__/**/*",
+    "./src/**/*.test.ts",
+    "./src/**/*.test.mts"
+  ]
+}

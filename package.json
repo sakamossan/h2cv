@@ -1,0 +1,33 @@
+{
+  "name": "h2cv",
+  "version": "0.1.0",
+  "description": "A command-line tool that lets Claude Code start Claude Code sessions and give them instructions.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sakamossan/h2cv.git"
+  },
+  "bin": {
+    "h2cv": "./dist/bin/h2cv.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "npx tsc -p tsconfig.typecheck.json --skipLibCheck",
+    "build": "tsc -p tsconfig.json --skipLibCheck",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.14.15",
+    "tsx": "^4.19.3",
+    "typescript": "^5.5.4",
+    "vitest": "^4.0.18"
+  }
+}
