@@ -1,8 +1,10 @@
 import type { LaunchDeps, LaunchRequest } from "./launch.js";
 import type { HerdrPort } from "./launcher.js";
 import { describe, expect, it } from "vitest";
-import { fakeHerdrPort, FAST_TIMINGS } from "./__tests__/fakes.js";
+import { fakeHerdrPort, FAST_TIMINGS, fixedBox } from "./__tests__/fakes.js";
+import { PROBE_UNAVAILABLE_MESSAGE } from "./herdr-adapter.js";
 import { runLaunch } from "./launch.js";
+import { UNTRUSTED_WORKSPACE_MESSAGE } from "./sender.js";
 
 const REQ: LaunchRequest = {
   cwd: "/wt/owner/repo/2063",
@@ -194,8 +196,8 @@ describe("runLaunch", () => {
   it("プローブ握手が通らなければ start-failed で止まり、agent start へ進まない", () => {
     const started: string[] = [];
     const herdr = fakeHerdrPort({
-      paneWaitOutput: () => false,
-      paneReadRecent: () => "$ ",
+      paneWaitOutput: () => "timeout",
+      paneReadTail: () => "$ ",
       agentStart: (name) => {
         started.push(name);
         return { ok: true };
@@ -214,6 +216,71 @@ describe("runLaunch", () => {
     if (r.ok) throw new Error("expected not ok");
     expect(r.failure.probeCount).toBeGreaterThan(0);
     expect(started).toEqual([]);
+  });
+  it("画面待ちが待ちに入れなければ打鍵は 1 発だけで shell-probe-unavailable で止まる", () => {
+    const typed: string[] = [];
+    const started: string[] = [];
+    const herdr = fakeHerdrPort({
+      paneRun: (_pane, text) => {
+        typed.push(text);
+      },
+      paneWaitOutput: () => "unavailable",
+      paneReadTail: () => "usage: herdr pane <COMMAND>",
+      agentStart: (name) => {
+        started.push(name);
+        return { ok: true };
+      },
+    });
+    const r = runLaunch(REQ, deps(herdr));
+    expect(r).toMatchObject({
+      ok: false,
+      failure: {
+        error: "start-failed",
+        stage: "shell",
+        probeCount: 1,
+        stderr: expect.stringContaining("shell-probe-unavailable"),
+        message: PROBE_UNAVAILABLE_MESSAGE,
+        paneTail: "usage: herdr pane <COMMAND>",
+      },
+    });
+    expect(typed).toHaveLength(1);
+    expect(started).toEqual([]);
+  });
+  it("待ちに入れなかった shell 段の trace は timeout ではなく unavailable", () => {
+    const herdr = fakeHerdrPort({ paneWaitOutput: () => "unavailable" });
+    const r = runLaunch(REQ, deps(herdr));
+    if (r.ok) throw new Error("expected not ok");
+    expect(r.failure["trace"]).toContainEqual({
+      stage: "shell",
+      ms: expect.any(Number),
+      result: "unavailable",
+    });
+  });
+  it("予算を使い切った不達は shell-not-ready のまま撃ち直してから止まる", () => {
+    let probes = 0;
+    const herdr = fakeHerdrPort({
+      paneRun: () => {
+        probes++;
+      },
+      paneWaitOutput: () => "timeout",
+    });
+    const r = runLaunch(REQ, deps(herdr));
+    expect(r).toMatchObject({
+      ok: false,
+      failure: {
+        error: "start-failed",
+        stage: "shell",
+        stderr: expect.stringContaining("shell-not-ready"),
+      },
+    });
+    expect(probes).toBeGreaterThan(1);
+    if (r.ok) throw new Error("expected not ok");
+    expect(r.failure["trace"]).toContainEqual({
+      stage: "shell",
+      ms: expect.any(Number),
+      result: "timeout",
+    });
+    expect(r.failure["message"]).toBeUndefined();
   });
   it("agent start が agent_not_ready でも start-failed にせず readiness まで進む", () => {
     const herdr = fakeHerdrPort({
@@ -239,7 +306,9 @@ describe("runLaunch", () => {
   });
   it("1 回飲まれてもプローブを打ち直して起動まで進む", () => {
     let waits = 0;
-    const herdr = fakeHerdrPort({ paneWaitOutput: () => ++waits >= 2 });
+    const herdr = fakeHerdrPort({
+      paneWaitOutput: () => (++waits >= 2 ? "matched" : "timeout"),
+    });
     expect(runLaunch(REQ, deps(herdr))).toMatchObject({
       ok: true,
       value: { promptSent: true },
@@ -283,6 +352,37 @@ describe("runLaunch", () => {
       },
     });
     expect(sends).toEqual([]);
+  });
+  it("未 trust な workspace は untrusted-workspace で止まり、Enter を撃たない", () => {
+    const keys: string[] = [];
+    const herdr = fakeHerdrPort({
+      readVisible: () =>
+        " Quick safety check: Is this a project you created or one you trust?",
+      agentSendKeys: (_pane, k) => {
+        keys.push(k);
+      },
+    });
+    const r = runLaunch(REQ, deps(herdr));
+    expect(r).toMatchObject({
+      ok: false,
+      failure: {
+        error: "untrusted-workspace",
+        stage: "dialog",
+        agentName: "repo-2063",
+        message: UNTRUSTED_WORKSPACE_MESSAGE,
+      },
+    });
+    expect(r.ok === false && "timeoutMs" in r.failure).toBe(false);
+    expect(keys).toEqual([]);
+  });
+  it("untrusted-workspace の trace は dialog 段を fail-closed で閉じる", () => {
+    const herdr = fakeHerdrPort({
+      readVisible: () => " Yes, I trust this folder",
+    });
+    const r = runLaunch(REQ, deps(herdr));
+    expect(r.ok === false && r.failure.trace).toContainEqual(
+      expect.objectContaining({ stage: "dialog", result: "fail-closed" }),
+    );
   });
   it("送出中に宛先が消えたら agent-vanished (跡地には撃たない)", () => {
     let gets = 0;
@@ -356,8 +456,8 @@ describe("runLaunch", () => {
         paneRun: (pane) => {
           probed.push(pane);
         },
-        paneWaitOutput: () => false,
-        paneReadRecent: () => "$ ",
+        paneWaitOutput: () => "timeout",
+        paneReadTail: () => "$ ",
         agentStart: (name) => {
           started.push(name);
           return { ok: true };
@@ -378,7 +478,7 @@ describe("runLaunch", () => {
   it("submit 成立を確認できなければ誤った成功を返さず send-unverified", () => {
     const herdr = fakeHerdrPort({
       waitWorking: () => false,
-      readBoxBody: () => "先客の本文",
+      ...fixedBox(() => "先客の本文"),
       agentSendKeys: () => {},
     });
     expect(runLaunch(REQ, deps(herdr))).toMatchObject({

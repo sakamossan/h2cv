@@ -32,6 +32,9 @@ export type AgentGetResponse = {
 };
 const SGR_RE = /\x1b\[([0-9;]*)m/g;
 const BOX_RULE_RE = /^\s*─{10,}\s*$/;
+const BOX_LABELED_RULE_RE = /^\s*─{10,}\s+\S[^─]*\s+─+\s*$/;
+const isTopRule = (line: string) =>
+  BOX_RULE_RE.test(line) || BOX_LABELED_RULE_RE.test(line);
 const PROMPT_MARKER = "❯";
 function applySgr(dim: boolean, params: string[]): boolean {
   let next = dim;
@@ -61,7 +64,11 @@ export function stripDimAndSgr(line: string): string {
   if (!dim) out += line.slice(last);
   return out;
 }
-export function parseBoxBody(ansi: string): string | null {
+export type BoxRead = {
+  body: string;
+  truncated: boolean;
+};
+export function parseBox(ansi: string): BoxRead | null {
   const lines = ansi.split(/\r?\n/).map(stripDimAndSgr);
   let bottom = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -73,7 +80,7 @@ export function parseBoxBody(ansi: string): string | null {
   if (bottom < 0) return null;
   let top = -1;
   for (let i = bottom - 1; i >= 0; i--) {
-    if (BOX_RULE_RE.test(lines[i])) {
+    if (isTopRule(lines[i])) {
       top = i;
       break;
     }
@@ -87,7 +94,13 @@ export function parseBoxBody(ansi: string): string | null {
       ...body.slice(marker + 1),
     ];
   }
-  return body.join(" ").replace(/\s+/g, " ").trim();
+  return {
+    body: body.join(" ").replace(/\s+/g, " ").trim(),
+    truncated: top < 0,
+  };
+}
+export function parseBoxBody(ansi: string): string | null {
+  return parseBox(ansi)?.body ?? null;
 }
 export type DetectionRuleSummary = {
   id: string;
@@ -121,6 +134,23 @@ export type ScreenDetection = {
   rules: DetectionRuleSummary[];
   regions: Record<string, string>;
 };
+const SCREEN_DETECTION_FIELD_SET: Record<
+  keyof Required<ScreenDetection>,
+  true
+> = {
+  state: true,
+  matchedRule: true,
+  visibleBlocker: true,
+  visibleIdle: true,
+  visibleWorking: true,
+  fallbackReason: true,
+  manifestVersion: true,
+  screenDetectionSkipped: true,
+  warning: true,
+  rules: true,
+  regions: true,
+};
+export const SCREEN_DETECTION_FIELDS = Object.keys(SCREEN_DETECTION_FIELD_SET);
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -228,6 +258,15 @@ export const SERVER_PROTOCOL_MISMATCH_MESSAGE =
   " then fire again once it is back up with the new binary (whatever keeps it" +
   " resident will restart it; otherwise start it yourself)." +
   " Stopping closes every running pane.";
+export type PaneWaitResult = "matched" | "timeout" | "unavailable";
+const PROBE_WAIT_ENTERED_RATIO = 0.5;
+export const PROBE_UNAVAILABLE_MESSAGE =
+  "`herdr pane wait-output` returned without waiting, so the shell probe could" +
+  " not be answered. Either the running herdr is older than the subcommand" +
+  " (it landed in 0.8.2 and older builds print the usage and exit non-zero), or" +
+  " the pane is gone / the server stopped answering. Check with `herdr status`" +
+  " and `herdr pane list`, upgrade herdr if it is behind the tested-with version" +
+  " (`h2cv explain overview` prints it), then fire again.";
 export const AGENT_START_TIMEOUT_MS = 300000;
 const AGENT_PANE_BUSY = "agent_pane_busy";
 export const AGENT_START_RETRY_MS = 300;
@@ -303,29 +342,22 @@ export class HerdrAdapter {
     const r = this.exec("herdr", ["agent", "read", target, ...args]);
     return r.code !== 0 ? null : r.stdout;
   }
-  readRecent(target: string, lines: number): string {
-    return (
-      this.agentRead(target, [
-        "--source",
-        "recent",
-        "--lines",
-        String(lines),
-      ]) ?? ""
-    );
-  }
   readVisible(target: string): string {
     return (
       this.agentRead(target, ["--source", "visible", "--format", "text"]) ?? ""
     );
   }
-  readBoxBody(target: string): string | null {
+  readBox(target: string): BoxRead | null {
     const text = this.agentRead(target, [
       "--source",
       "visible",
       "--format",
       "ansi",
     ]);
-    return text === null ? null : parseBoxBody(text);
+    return text === null ? null : parseBox(text);
+  }
+  readBoxBody(target: string): string | null {
+    return this.readBox(target)?.body ?? null;
   }
   agentExplain(target: string): ScreenDetection | null {
     const r = this.exec("herdr", ["agent", "explain", target, "--json"]);
@@ -381,7 +413,12 @@ export class HerdrAdapter {
         "could not parse tab_id / root_pane.pane_id from `herdr tab create`",
     };
   }
-  paneWaitOutput(pane: string, match: string, timeoutMs: number): boolean {
+  paneWaitOutput(
+    pane: string,
+    match: string,
+    timeoutMs: number,
+  ): PaneWaitResult {
+    const startedAt = Date.now();
     const r = this.exec("herdr", [
       "pane",
       "wait-output",
@@ -393,17 +430,18 @@ export class HerdrAdapter {
       "--timeout",
       String(timeoutMs),
     ]);
-    return r.code === 0;
+    if (r.code === 0) return "matched";
+    return Date.now() - startedAt >= timeoutMs * PROBE_WAIT_ENTERED_RATIO
+      ? "timeout"
+      : "unavailable";
   }
-  paneReadRecent(pane: string, lines: number): string {
+  paneReadTail(pane: string): string {
     const r = this.exec("herdr", [
       "pane",
       "read",
       pane,
       "--source",
-      "recent",
-      "--lines",
-      String(lines),
+      "visible",
       "--format",
       "text",
     ]);
@@ -454,8 +492,8 @@ export type HerdrSendPort = Pick<
   | "waitIdle"
   | "waitIdleOrBlocked"
   | "waitWorking"
-  | "readRecent"
   | "readVisible"
+  | "readBox"
   | "readBoxBody"
   | "agentExplain"
   | "agentSendKeys"
@@ -464,9 +502,5 @@ export type HerdrSendPort = Pick<
 >;
 export type HerdrLaunchPort = Pick<
   HerdrAdapter,
-  | "probeServer"
-  | "tabCreate"
-  | "paneWaitOutput"
-  | "paneReadRecent"
-  | "agentStart"
+  "probeServer" | "tabCreate" | "paneWaitOutput" | "paneReadTail" | "agentStart"
 >;

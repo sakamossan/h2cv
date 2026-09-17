@@ -1,6 +1,6 @@
 {
   "name": "h2cv",
-  "version": "0.1.0",
+  "version": "0.4.2",
   "description": "A command-line tool that lets Claude Code start Claude Code sessions and give them instructions.",
   "type": "module",
   "license": "MIT",
@@ -20,7 +20,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "npx tsc -p tsconfig.typecheck.json --skipLibCheck",
-    "build": "tsc -p tsconfig.json --skipLibCheck",
+    "build": "npx tsc -p tsconfig.json --skipLibCheck",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {},

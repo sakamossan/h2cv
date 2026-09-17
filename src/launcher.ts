@@ -20,7 +20,7 @@ export type LaunchReadinessResult =
     }
   | {
       ok: false;
-      kind: "agent-vanished" | "launch-timeout";
+      kind: "agent-vanished" | "launch-timeout" | "untrusted-workspace";
       stage: StageId;
       trace: TraceEntry[];
       timeoutMs?: number;
@@ -35,6 +35,7 @@ export type ShellGateResult =
     }
   | {
       ok: false;
+      reason: "timeout" | "probe-unavailable";
       probeCount: number;
       elapsedMs: number;
       paneTail: string;
@@ -63,31 +64,36 @@ export class AgentLauncher {
     const startedAt = Date.now();
     const deadline = startedAt + this.timings.shellReadyTimeoutMs;
     const nonce = probeNonce();
+    const fail = (
+      reason: "timeout" | "probe-unavailable",
+      probes: number,
+    ): ShellGateResult => ({
+      ok: false,
+      reason,
+      probeCount: probes,
+      elapsedMs: Date.now() - startedAt,
+      paneTail: this.herdr.paneReadTail(paneId),
+    });
     for (let probes = 1; ; probes++) {
       this.herdr.paneRun(paneId, `${PROBE_TYPED_PREFIX}${nonce}`);
       const remaining = deadline - Date.now();
-      if (
-        remaining > 0 &&
-        this.herdr.paneWaitOutput(
-          paneId,
-          `${PROBE_MARKER_PREFIX}${nonce}`,
-          Math.min(this.timings.shellProbeWaitMs, remaining),
-        )
-      ) {
+      const waited =
+        remaining > 0
+          ? this.herdr.paneWaitOutput(
+              paneId,
+              `${PROBE_MARKER_PREFIX}${nonce}`,
+              Math.min(this.timings.shellProbeWaitMs, remaining),
+            )
+          : "timeout";
+      if (waited === "matched") {
         return {
           ok: true,
           probeCount: probes,
           elapsedMs: Date.now() - startedAt,
         };
       }
-      if (Date.now() >= deadline) {
-        return {
-          ok: false,
-          probeCount: probes,
-          elapsedMs: Date.now() - startedAt,
-          paneTail: this.herdr.paneReadRecent(paneId, 20),
-        };
-      }
+      if (waited === "unavailable") return fail("probe-unavailable", probes);
+      if (Date.now() >= deadline) return fail("timeout", probes);
     }
   }
   start(
@@ -126,7 +132,7 @@ export class AgentLauncher {
           stage,
           trace: preRows("timeout"),
           timeoutMs,
-          paneTail: this.herdr.readRecent(paneId, 20),
+          paneTail: this.herdr.readVisible(paneId),
         };
       }
       const agentStartedAt = Date.now();
@@ -170,13 +176,14 @@ export class AgentLauncher {
           result: "ok",
         };
         if (!gate.ok) {
+          const untrusted = gate.reason === "untrusted-workspace";
           return {
             ok: false,
-            kind: "launch-timeout",
+            kind: untrusted ? "untrusted-workspace" : "launch-timeout",
             stage: gate.stage,
             trace: [agentRow, ...gate.trace],
-            timeoutMs,
-            paneTail: this.herdr.readRecent(paneId, 20),
+            ...(untrusted ? {} : { timeoutMs }),
+            paneTail: this.herdr.readVisible(paneId),
             detection: gate.detection,
           };
         }

@@ -6,6 +6,7 @@
     "moduleResolution": "NodeNext",
     "lib": ["ESNext"],
     "outDir": "./dist",
+    "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
     "inlineSourceMap": true,

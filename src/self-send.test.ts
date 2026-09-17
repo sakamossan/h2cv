@@ -201,24 +201,23 @@ describe("selfSend (watcher モード)", () => {
     });
     expect(ran).toBe(0);
   });
-  it("background work が matched なら idle 相当で抜けて送出する", () => {
+  it("shell を残したまま idle になったセッションへ締めの /exit を送出する", () => {
     const r = selfSend(
       ["--watch", "/exit"],
       herdr({
-        waitIdle: () => false,
         agentExplain: () => ({
-          state: "working",
+          state: "idle",
           matchedRule: {
-            id: "background_shell_working",
-            state: "working",
-            priority: 965,
+            id: "live_prompt_box",
+            state: "idle",
+            priority: 950,
           },
           visibleBlocker: false,
-          visibleIdle: false,
-          visibleWorking: true,
+          visibleIdle: true,
+          visibleWorking: false,
           fallbackReason: null,
-          manifestVersion: "2026.08.21.1",
-          rules: [{ id: "background_shell_working", matched: true }],
+          manifestVersion: "2026.09.04.1",
+          rules: [{ id: "live_prompt_box", matched: true }],
           regions: {},
         }),
       }),

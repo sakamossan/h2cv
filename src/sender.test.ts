@@ -6,15 +6,20 @@ import { describe, expect, it, vi } from "vitest";
 import { fakeSendPort } from "./__tests__/fakes.js";
 import {
   AgentSender,
+  BACKGROUND_WORK_RULE_IDS,
   classifyVerdict,
   inputReadyGate,
   isTurnlessCommand,
+  matchOwnBody,
+  splitChunks,
   TERMINATING_SLASH_COMMANDS,
   TURNLESS_SLASH_COMMANDS,
+  waitInputAccepting,
 } from "./sender.js";
 import {
   EXIT_DIALOG_MAX_ENTERS,
   INTERSTITIAL_MAX_ENTERS,
+  SEND_CHUNK_MAX_BYTES,
   SEND_MAX_ATTEMPTS,
 } from "./stages.js";
 
@@ -23,6 +28,7 @@ const AGENT = "agent-3";
 const TEXT = "/loop 30m /run-in-the-loop";
 function boxHerdr(opts: {
   read: () => string | null;
+  truncated?: () => boolean;
   onSendText?: (text: string) => void;
   onSendKeys?: (keys: string) => void;
   working?: () => boolean;
@@ -44,6 +50,12 @@ function boxHerdr(opts: {
             agent_status: opts.status?.(),
             ...(a === null ? {} : { agent: a }),
           };
+    }),
+    readBox: vi.fn(() => {
+      const body = opts.read();
+      return body === null
+        ? null
+        : { body, truncated: opts.truncated?.() ?? false };
     }),
     readBoxBody: vi.fn(opts.read),
     paneSendText: vi.fn((_pane: string, text: string) =>
@@ -268,6 +280,225 @@ describe("AgentSender.send", () => {
     expect(enters).toBe(1);
   });
 });
+describe("splitChunks (#3205)", () => {
+  it("上限以下の本文は 1 要素 = 従来どおりの 1 write", () => {
+    expect(splitChunks("abc", 10)).toEqual(["abc"]);
+  });
+  it("上限ちょうどでも割らない", () => {
+    expect(splitChunks("abcde", 5)).toEqual(["abcde"]);
+  });
+  it("上限を 1 byte 超えたら割る", () => {
+    expect(splitChunks("abcdef", 5)).toEqual(["abcde", "f"]);
+  });
+  it("マルチバイト文字を途中で割らない", () => {
+    const chunks = splitChunks("あああああ", 7);
+    expect(chunks).toEqual(["ああ", "ああ", "あ"]);
+    for (const c of chunks)
+      expect(Buffer.byteLength(c, "utf8")).toBeLessThanOrEqual(7);
+  });
+  it("空文字は空配列 (撃つものが無い)", () => {
+    expect(splitChunks("", 10)).toEqual([]);
+  });
+  it("連結すると元の本文に戻る", () => {
+    const text = "あいうえお ABCDE かきくけこ 12345";
+    expect(splitChunks(text, 7).join("")).toBe(text);
+  });
+});
+describe("matchOwnBody (#3205)", () => {
+  const CHUNKS = ["aaa", "bbb", "ccc"];
+  it("上端が見えていれば全 chunk の連結と完全一致で same", () => {
+    expect(
+      matchOwnBody({ body: "aaabbbccc", truncated: false }, CHUNKS),
+    ).toEqual({
+      kind: "same",
+    });
+  });
+  it("上端が見えていれば chunk 境界の前方一致は prefix (載っている chunk 数を返す)", () => {
+    expect(matchOwnBody({ body: "aaabbb", truncated: false }, CHUNKS)).toEqual({
+      kind: "prefix",
+      landed: 2,
+    });
+  });
+  it("上端が見えていれば末尾だけの box は partial (先頭欠損はここで弾く)", () => {
+    expect(matchOwnBody({ body: "ccc", truncated: false }, CHUNKS)).toEqual({
+      kind: "partial",
+    });
+  });
+  it("上端が画面外なら末尾一致を同一とみなす (縦溢れの救済。#1679)", () => {
+    expect(matchOwnBody({ body: "ccc", truncated: true }, CHUNKS)).toEqual({
+      kind: "same",
+    });
+  });
+  it("上端が画面外でも、載っている最大の chunk 数を prefix として返す", () => {
+    expect(matchOwnBody({ body: "abbb", truncated: true }, CHUNKS)).toEqual({
+      kind: "prefix",
+      landed: 2,
+    });
+  });
+  it("空白は全部落として比べる (折り返しのインデント。#1679)", () => {
+    expect(
+      matchOwnBody({ body: " aaa bb\n b ccc ", truncated: false }, CHUNKS),
+    ).toEqual({ kind: "same" });
+  });
+  it("paste 畳みの placeholder が挟まった box は partial (#3205)", () => {
+    expect(
+      matchOwnBody({ body: "[Pasted text #1]ccc", truncated: false }, CHUNKS),
+    ).toEqual({ kind: "partial" });
+  });
+  it("placeholder だけの box も partial (本文がまるごと畳まれた形)", () => {
+    expect(
+      matchOwnBody(
+        { body: "[Pasted text #2 +12 lines]", truncated: false },
+        CHUNKS,
+      ),
+    ).toEqual({ kind: "partial" });
+  });
+  it("placeholder の判定は呼び出しをまたいで安定する (g フラグの lastIndex)", () => {
+    const box = { body: "[Pasted text #1]ccc", truncated: false };
+    expect(matchOwnBody(box, CHUNKS)).toEqual({ kind: "partial" });
+    expect(matchOwnBody(box, CHUNKS)).toEqual({ kind: "partial" });
+    expect(matchOwnBody(box, CHUNKS)).toEqual({ kind: "partial" });
+  });
+  it("本文のどこにも無い内容は foreign", () => {
+    expect(
+      matchOwnBody({ body: "書きかけの下書き", truncated: false }, CHUNKS),
+    ).toEqual({
+      kind: "foreign",
+    });
+  });
+});
+describe("AgentSender.send の先頭欠損の検知 (#3205)", () => {
+  const LONG = "x".repeat(SEND_CHUNK_MAX_BYTES * 2 + 100);
+  it("末尾だけが box に載ったら Enter を撃たず landed-partial で返す", () => {
+    let enters = 0;
+    const herdr = boxHerdr({
+      read: () => "x".repeat(10),
+      onSendKeys: (keys) => {
+        if (keys === "Enter") enters += 1;
+      },
+      working: () => false,
+    });
+    const result = sender(herdr).send(LONG);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "unverified",
+      sendVerdict: "landed-partial",
+    });
+    expect(marks(result.trace)).toEqual([
+      "1 alive:ok",
+      "1 box:partial",
+      "grace:timeout",
+    ]);
+    expect(enters).toBe(0);
+  });
+  it("タイプした chunk が断片でしか戻らなければ type:partial で止まる", () => {
+    let enters = 0;
+    let typed = 0;
+    const herdr = boxHerdr({
+      read: () => (typed === 0 ? "" : "x".repeat(10)),
+      onSendText: () => {
+        typed += 1;
+      },
+      onSendKeys: (keys) => {
+        if (keys === "Enter") enters += 1;
+      },
+      working: () => false,
+    });
+    const result = sender(herdr).send(LONG);
+    expect(result).toMatchObject({ ok: false, sendVerdict: "landed-partial" });
+    expect(marks(result.trace)).toEqual([
+      "1 alive:ok",
+      "1 box:ok",
+      "1 type:partial",
+      "grace:timeout",
+    ]);
+    expect(enters).toBe(0);
+  });
+  it("縦溢れで末尾しか読めない box は従来どおり同一とみなして Enter へ進む (#1679)", () => {
+    let enters = 0;
+    const herdr = boxHerdr({
+      read: () => LONG.slice(-50),
+      truncated: () => true,
+      onSendKeys: (keys) => {
+        if (keys === "Enter") enters += 1;
+      },
+      working: () => true,
+    });
+    const result = sender(herdr).send(LONG);
+    expect(result).toMatchObject({ ok: true, attempts: 1 });
+    expect(marks(result.trace)).toEqual([
+      "1 alive:ok",
+      "1 box:ok",
+      "1 enter:ok",
+    ]);
+    expect(herdr.paneSendText).not.toHaveBeenCalled();
+    expect(enters).toBe(1);
+  });
+});
+describe("AgentSender.send の chunk 送出 (#3205)", () => {
+  const BODY = "あ".repeat(600) + "abc";
+  const CHUNKS = splitChunks(BODY, SEND_CHUNK_MAX_BYTES);
+  it("splitChunks の結果と paneSendText の呼び出し列が一致する", () => {
+    expect(CHUNKS.length).toBe(3);
+    let box = "";
+    const herdr = boxHerdr({
+      read: () => box,
+      onSendText: (text) => {
+        box += text;
+      },
+      onSendKeys: () => {
+        box = "";
+      },
+      working: () => true,
+    });
+    const result = sender(herdr).send(BODY);
+    expect(result).toMatchObject({ ok: true, attempts: 1 });
+    expect(herdr.paneSendText.mock.calls.map((c: unknown[]) => c[1])).toEqual(
+      CHUNKS,
+    );
+    expect(marks(result.trace)).toEqual([
+      "1 alive:ok",
+      "1 box:ok",
+      "1 type:ok",
+      "1 enter:ok",
+    ]);
+  });
+  it("2 本目の chunk が落ちたら、次周は 1 本目を撃ち直さず続きから再開する", () => {
+    let box = "";
+    let drops = 1;
+    const herdr = boxHerdr({
+      read: () => box,
+      onSendText: (text) => {
+        if (text === CHUNKS[1] && drops > 0) {
+          drops -= 1;
+          return;
+        }
+        box += text;
+      },
+      onSendKeys: () => {
+        box = "";
+      },
+      working: () => true,
+    });
+    const result = sender(herdr).send(BODY);
+    expect(result).toMatchObject({ ok: true, attempts: 2 });
+    expect(herdr.paneSendText.mock.calls.map((c: unknown[]) => c[1])).toEqual([
+      CHUNKS[0],
+      CHUNKS[1],
+      CHUNKS[1],
+      CHUNKS[2],
+    ]);
+    expect(marks(result.trace)).toEqual([
+      "1 alive:ok",
+      "1 box:ok",
+      "1 type:timeout",
+      "2 alive:ok",
+      "2 box:ok",
+      "2 type:ok",
+      "2 enter:ok",
+    ]);
+  });
+});
 describe("AgentSender.send の box read-back ポーリング (#1752)", () => {
   it("landing が途中の読みで来たら上限を待たずに Enter へ進む", () => {
     let reads = 0;
@@ -282,7 +513,7 @@ describe("AgentSender.send の box read-back ポーリング (#1752)", () => {
       "1 type:ok",
       "1 enter:ok",
     ]);
-    expect(herdr.readBoxBody).toHaveBeenCalledTimes(4);
+    expect(herdr.readBox).toHaveBeenCalledTimes(4);
     expect(herdr.agentSendKeys).toHaveBeenCalledWith(PANE, "Enter");
   });
   it("box が null でも上限内に読めるようになれば同じ周で続行し attempt を消費しない", () => {
@@ -493,11 +724,12 @@ describe("classifyVerdict (working 検証)", () => {
     boxBody: string | null,
     status: string | null,
     lateWorking: boolean,
+    truncated = false,
   ) =>
     classifyVerdict(
       "herdr-agent-working",
       trace,
-      boxBody,
+      boxBody === null ? null : { body: boxBody, truncated },
       status,
       lateWorking,
       TEXT,
@@ -518,6 +750,16 @@ describe("classifyVerdict (working 検証)", () => {
   it("折り返しでインデントが付いた残留も landed-not-submitted として拾う", () => {
     expect(
       verdict(t("enter:timeout"), "/loop 30m /run-in-the- loop", "idle", false),
+    ).toBe("landed-not-submitted");
+  });
+  it("終端 box に本文の断片しか無ければ landed-partial (#3205)", () => {
+    expect(verdict(t("enter:timeout"), TEXT.slice(-8), "idle", false)).toBe(
+      "landed-partial",
+    );
+  });
+  it("上端が画面外なら同じ末尾でも landed-not-submitted (縦溢れの救済。#1679)", () => {
+    expect(
+      verdict(t("enter:timeout"), TEXT.slice(-8), "idle", false, true),
     ).toBe("landed-not-submitted");
   });
   it("Enter は撃てたが終端 box が空なら submitted-unconfirmed (再着火は危険)", () => {
@@ -633,30 +875,10 @@ describe("inputReadyGate", () => {
     const herdr = gateHerdr({ idle: () => false });
     expect(gate(herdr)).toMatchObject({ ok: false, stage: "idle" });
   });
-  it("background work が matched なら idle 相当で抜け、trace に background-work が残る", () => {
+  it("集合が空なので background work が matched でも予算まで待って timeout する", () => {
     const herdr = {
       ...gateHerdr({ idle: () => false }),
       agentExplain: vi.fn(() => bgDetection("background_shell_working")),
-    };
-    const result = gate(herdr);
-    expect(result).toMatchObject({ ok: true });
-    expect(marks(result.trace)).toContain("idle:background-work");
-    expect(herdr.agentExplain).toHaveBeenCalledWith(PANE);
-  });
-  it("box が読めない間は background work でも通さない (入力欄が描かれていない)", () => {
-    const herdr = {
-      ...gateHerdr({ idle: () => false, box: () => null }),
-      agentExplain: vi.fn(() => bgDetection("background_shell_working")),
-    };
-    expect(gate(herdr, { deadlineMs: 30 })).toMatchObject({
-      ok: false,
-      stage: "idle",
-    });
-  });
-  it("集合外のルールなら従来どおり予算まで待って timeout する", () => {
-    const herdr = {
-      ...gateHerdr({ idle: () => false }),
-      agentExplain: vi.fn(() => bgDetection("osc_title_working")),
     };
     expect(gate(herdr, { deadlineMs: 30 })).toMatchObject({
       ok: false,
@@ -716,21 +938,20 @@ describe("inputReadyGate", () => {
     ].join("\n");
     const TRUST_DIALOG = [
       "",
-      "─".repeat(80),
+      "─".repeat(120),
       " Accessing workspace:",
       "",
-      " /var/tmp/trust-probe-1792",
+      " /home/you/trust-probe",
       "",
-      " Quick safety check: Is this a project you created or one you trust? (Like your",
-      " own code, a well-known open source project, or work from your team). If not,",
-      " take a moment to review what's in this folder first.",
+      " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+      " project, or work from your team). If not, take a moment to review what's in this folder first.",
       "",
       " Claude Code'll be able to read, edit, and execute files here.",
       "",
       " Security guide",
       "",
-      " ❯ 1. Yes, I trust this folder",
-      "   2. No, exit",
+      " ❯ No, exit",
+      "   Yes, I trust this folder",
       "",
       " Enter to confirm · Esc to cancel",
     ].join("\n");
@@ -742,13 +963,37 @@ describe("inputReadyGate", () => {
       expect(gate(herdr)).toMatchObject({ ok: true });
       expect(herdr.agentSendKeys).toHaveBeenCalledWith(PANE, "Enter");
     });
-    it("workspace trust ダイアログ (実機ダンプ) も Enter 1 回で通過する", () => {
-      let visibles = 0;
-      const herdr = gateHerdr({
-        visible: () => (++visibles === 1 ? TRUST_DIALOG : ""),
+    it("workspace trust ダイアログ (実機ダンプ) は Enter を撃たずに畳む", () => {
+      const herdr = gateHerdr({ visible: () => TRUST_DIALOG });
+      expect(gate(herdr)).toMatchObject({
+        ok: false,
+        reason: "untrusted-workspace",
+        stage: "dialog",
       });
-      expect(gate(herdr)).toMatchObject({ ok: true });
-      expect(herdr.agentSendKeys).toHaveBeenCalledTimes(1);
+      expect(herdr.agentSendKeys).not.toHaveBeenCalled();
+    });
+    it("trust で畳んだ段は trace に fail-closed で載る", () => {
+      const herdr = gateHerdr({ visible: () => TRUST_DIALOG });
+      const result = gate(herdr);
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.trace).toContainEqual(
+        expect.objectContaining({ stage: "dialog", result: "fail-closed" }),
+      );
+    });
+    it("trust は blocked 主判定より先に評価する (blocked でも撃たない)", () => {
+      const herdr = gateHerdr({
+        visible: () => TRUST_DIALOG,
+        status: () => "blocked",
+      });
+      expect(gate(herdr)).toMatchObject({ reason: "untrusted-workspace" });
+      expect(herdr.agentSendKeys).not.toHaveBeenCalled();
+    });
+    it("reuse 経路では trust の文言が画面にあっても畳まない", () => {
+      const herdr = gateHerdr({ visible: () => TRUST_DIALOG });
+      expect(gate(herdr, { detectInterstitial: false })).toMatchObject({
+        ok: true,
+      });
+      expect(herdr.agentSendKeys).not.toHaveBeenCalled();
     });
     it("MCP 複数ダイアログ (2.1.226 実機ダンプ) も Enter 1 回で通過する", () => {
       let visibles = 0;
@@ -812,20 +1057,93 @@ describe("inputReadyGate", () => {
       });
       expect(herdr.agentSendKeys).not.toHaveBeenCalled();
     });
-    it("claude 2.1.220 の実文言をすべて検出する (凍結値の追従確認)", () => {
+    it("MCP 側の実文言をすべて検出する (凍結値の追従確認)", () => {
       for (const line of [
         "New MCP server found in this project: probe-dummy",
         "  ❯ 1. Use this MCP server",
         "2 new MCP servers found in this project",
         "Select any you wish to enable.",
-        " Quick safety check: Is this a project you created or one you trust? (Like your",
-        " ❯ 1. Yes, I trust this folder",
       ]) {
         const herdr = gateHerdr({ visible: () => line });
         gate(herdr);
         expect(herdr.agentSendKeys, line).toHaveBeenCalledWith(PANE, "Enter");
       }
     });
+    it("trust 側の実文言はどちらの行でも撃たずに畳む (凍結値の追従確認)", () => {
+      for (const line of [
+        " Quick safety check: Is this a project you created or one you trust? (Like your own code,",
+        "   Yes, I trust this folder",
+      ]) {
+        const herdr = gateHerdr({ visible: () => line });
+        expect(gate(herdr), line).toMatchObject({
+          reason: "untrusted-workspace",
+        });
+        expect(herdr.agentSendKeys, line).not.toHaveBeenCalled();
+      }
+    });
+  });
+});
+describe("waitInputAccepting の background work 判定 (#2989)", () => {
+  const FAKE_IDS = ["fake_background_working"] as const;
+  const wait = (
+    herdr: HerdrSendPort,
+    opts?: {
+      ruleIds?: readonly string[];
+      budgetMs?: number;
+    },
+  ) =>
+    waitInputAccepting(
+      herdr,
+      PANE,
+      Date.now() + (opts?.budgetMs ?? 60000),
+      () => false,
+      TEST_TIMINGS.idleProbeSliceMs,
+      opts?.ruleIds ?? FAKE_IDS,
+    );
+  it("本番の集合は空 (上流が background_shell_working を落とした)", () => {
+    expect(BACKGROUND_WORK_RULE_IDS).toEqual([]);
+  });
+  it("集合に載る id が matched で box が読めるなら background-work で抜ける", () => {
+    const herdr = {
+      ...fakeSendPort(),
+      readBoxBody: vi.fn(() => ""),
+      agentExplain: vi.fn(() => bgDetection(FAKE_IDS[0])),
+    } satisfies HerdrSendPort;
+    expect(wait(herdr)).toBe("background-work");
+    expect(herdr.agentExplain).toHaveBeenCalledWith(PANE);
+  });
+  it("box が読めない間は集合に載っていても抜けない (入力欄が描かれていない)", () => {
+    const herdr = {
+      ...fakeSendPort(),
+      readBoxBody: vi.fn(() => null),
+      agentExplain: vi.fn(() => bgDetection(FAKE_IDS[0])),
+    } satisfies HerdrSendPort;
+    expect(wait(herdr, { budgetMs: 30 })).toBe("timeout");
+  });
+  it("集合外のルールなら予算まで待って timeout する", () => {
+    const herdr = {
+      ...fakeSendPort(),
+      readBoxBody: vi.fn(() => ""),
+      agentExplain: vi.fn(() => bgDetection("osc_title_working")),
+    } satisfies HerdrSendPort;
+    expect(wait(herdr, { budgetMs: 30 })).toBe("timeout");
+    expect(herdr.agentExplain.mock.calls.length).toBeGreaterThan(1);
+  });
+  it("集合が空なら既定の呼び出しはどの matched rule でも抜けない", () => {
+    const herdr = {
+      ...fakeSendPort(),
+      readBoxBody: vi.fn(() => ""),
+      agentExplain: vi.fn(() => bgDetection(FAKE_IDS[0])),
+    } satisfies HerdrSendPort;
+    expect(
+      waitInputAccepting(
+        herdr,
+        PANE,
+        Date.now() + 30,
+        () => false,
+        TEST_TIMINGS.idleProbeSliceMs,
+      ),
+    ).toBe("timeout");
   });
 });
 function clearedOk(
@@ -1125,7 +1443,7 @@ describe("classifyVerdict (box クリア検証)", () => {
     classifyVerdict(
       "claude-box-cleared",
       trace,
-      boxBody,
+      boxBody === null ? null : { body: boxBody, truncated: false },
       "idle",
       false,
       COMMAND,
@@ -1142,6 +1460,9 @@ describe("classifyVerdict (box クリア検証)", () => {
   });
   it("折り返しでインデントが付いた残留も landed-not-submitted として拾う", () => {
     expect(verdict(ENTERED, "  /cle ar")).toBe("landed-not-submitted");
+  });
+  it("終端 box にコマンドの断片しか無ければ landed-partial (#3205)", () => {
+    expect(verdict(ENTERED, "ear")).toBe("landed-partial");
   });
   it("Enter を撃てた周があれば別内容の残留は submitted-unconfirmed (#2526)", () => {
     expect(verdict(ENTERED, "書きかけの下書き")).toBe("submitted-unconfirmed");
@@ -1354,18 +1675,23 @@ describe("AgentSender.send の exit ダイアログ段 (#2608)", () => {
   });
   it("非終端コマンド (/clear) では段そのものを評価しない", () => {
     const herdr = dialogHerdr();
-    expect(sender(herdr).send("/clear")).toMatchObject({
+    const result = sender(herdr).send("/clear");
+    expect(result).toMatchObject({
       ok: false,
       reason: "unverified",
       sendVerdict: "submitted-unconfirmed",
     });
     expect(herdr.agentSendKeys).not.toHaveBeenCalled();
-    expect(herdr.readVisible).not.toHaveBeenCalled();
+    expect(marks(result.trace).filter((m) => m.includes("dialog:"))).toEqual(
+      [],
+    );
   });
   it("平文 (working 検証) でも段そのものを評価しない", () => {
     const herdr = dialogHerdr();
-    sender(herdr).send(TEXT);
-    expect(herdr.readVisible).not.toHaveBeenCalled();
+    const result = sender(herdr).send(TEXT);
+    expect(marks(result.trace).filter((m) => m.includes("dialog:"))).toEqual(
+      [],
+    );
   });
 });
 describe("AgentSender.send の送出前 working (#2608)", () => {

@@ -1,10 +1,15 @@
-import type { HerdrSendPort, ScreenDetection } from "./herdr-adapter.js";
+import type {
+  BoxRead,
+  HerdrSendPort,
+  ScreenDetection,
+} from "./herdr-adapter.js";
 import type { StageId, TraceEntry, TraceResult } from "./stages.js";
 import type { GateTimings, SendTimings } from "./timings.js";
 import { sleepSync } from "./herdr-adapter.js";
 import {
   EXIT_DIALOG_MAX_ENTERS,
   INTERSTITIAL_MAX_ENTERS,
+  SEND_CHUNK_MAX_BYTES,
   SEND_GRACE_MS,
   SEND_MAX_ATTEMPTS,
   SEND_VERIFY_TIMEOUT_MS,
@@ -12,31 +17,85 @@ import {
 import { DEFAULT_SESSION_TIMINGS } from "./timings.js";
 
 const RC_CONNECTING_RE = /\/rc connecting/;
-function isSameBody(boxBody: string, sendText: string): boolean {
+export function splitChunks(text: string, maxBytes: number): string[] {
+  const chunks: string[] = [];
+  let cur = "";
+  let curBytes = 0;
+  for (const ch of text) {
+    const n = Buffer.byteLength(ch, "utf8");
+    if (curBytes + n > maxBytes) {
+      chunks.push(cur);
+      cur = "";
+      curBytes = 0;
+    }
+    cur += ch;
+    curBytes += n;
+  }
+  if (cur !== "") chunks.push(cur);
+  return chunks;
+}
+const PASTE_PLACEHOLDER_RE = /\[Pasted text #\d+[^\]]*\]/g;
+export type BodyMatch =
+  | {
+      kind: "same";
+    }
+  | {
+      kind: "prefix";
+      landed: number;
+    }
+  | {
+      kind: "partial";
+    }
+  | {
+      kind: "foreign";
+    };
+export function matchOwnBody(
+  box: BoxRead,
+  chunks: readonly string[],
+): BodyMatch {
   const strip = (s: string) => s.replace(/\s+/g, "");
-  const box = strip(boxBody);
-  const sent = strip(sendText);
-  return box !== "" && (box === sent || sent.endsWith(box));
+  const withoutPlaceholder = box.body.replace(PASTE_PLACEHOLDER_RE, "");
+  const pasted = withoutPlaceholder !== box.body;
+  const read = strip(withoutPlaceholder);
+  const prefixes = chunks.map((_, k) => strip(chunks.slice(0, k + 1).join("")));
+  const whole = prefixes[prefixes.length - 1] ?? "";
+  const hit = (p: string) =>
+    !pasted && (box.truncated ? p.endsWith(read) : p === read);
+  if (hit(whole)) return { kind: "same" };
+  for (let k = prefixes.length - 2; k >= 0; k--)
+    if (hit(prefixes[k])) return { kind: "prefix", landed: k + 1 };
+  if (pasted) return { kind: "partial" };
+  return whole.includes(read) ? { kind: "partial" } : { kind: "foreign" };
 }
 const INTERSTITIAL_RE =
-  /New MCP server[s]? found in this project|Use this MCP server|Select any you wish to enable|Quick safety check: Is this a project you created or one you trust|Yes, I trust this folder/i;
+  /New MCP server[s]? found in this project|Use this MCP server|Select any you wish to enable/i;
+const WORKSPACE_TRUST_RE =
+  /Quick safety check: Is this a project you created or one you trust|Yes, I trust this folder/i;
+export const UNTRUSTED_WORKSPACE_MESSAGE =
+  "claude asked whether this workspace is trusted, and its default choice is" +
+  " `No, exit`, so pressing Enter would have terminated the session instead of" +
+  " answering the question. Nothing was pressed and the session is still up." +
+  " Granting trust is not this layer's call: either run claude once in that" +
+  " directory yourself and accept the dialog, or set" +
+  " `projects[<path>].hasTrustDialogAccepted` to true in `~/.claude.json`. Note" +
+  " that claude decides trust per git repository, so a linked worktree inherits" +
+  " it from the repository it was created from.";
 const EXIT_DIALOG_RE = /Background work is running|Exit and stop tasks/;
 function isBlocked(herdr: HerdrSendPort, target: string): boolean {
   return herdr.agentGet(target)?.agent_status === "blocked";
 }
-const BACKGROUND_WORK_RULE_IDS: readonly string[] = [
-  "background_shell_working",
-];
+export const BACKGROUND_WORK_RULE_IDS: readonly string[] = [];
 export type IdleOutcome = "idle" | "background-work" | "timeout";
 function isBackgroundWorkOnly(
   herdr: HerdrSendPort,
   target: string,
   detection: ScreenDetection,
+  ruleIds: readonly string[] = BACKGROUND_WORK_RULE_IDS,
 ): boolean {
   const id = detection.matchedRule?.id;
   return (
     id !== undefined &&
-    BACKGROUND_WORK_RULE_IDS.includes(id) &&
+    ruleIds.includes(id) &&
     herdr.readBoxBody(target) !== null
   );
 }
@@ -46,6 +105,7 @@ export function waitInputAccepting(
   deadline: number,
   settle: (timeoutMs: number) => boolean,
   sliceMs: number,
+  backgroundWorkRuleIds: readonly string[] = BACKGROUND_WORK_RULE_IDS,
 ): IdleOutcome {
   while (true) {
     const remaining = deadline - Date.now();
@@ -53,10 +113,11 @@ export function waitInputAccepting(
     if (settle(Math.min(remaining, sliceMs))) return "idle";
     const detection = herdr.agentExplain(target);
     if (detection === null) return "timeout";
-    if (isBackgroundWorkOnly(herdr, target, detection))
+    if (isBackgroundWorkOnly(herdr, target, detection, backgroundWorkRuleIds))
       return "background-work";
   }
 }
+export type GateFailReason = "timeout" | "untrusted-workspace";
 export type InputGateResult =
   | {
       ok: true;
@@ -65,6 +126,7 @@ export type InputGateResult =
     }
   | {
       ok: false;
+      reason: GateFailReason;
       stage: StageId;
       elapsedMs: number;
       trace: TraceEntry[];
@@ -87,6 +149,7 @@ export type SendEvidence =
 export type SendVerdict =
   | "not-delivered"
   | "landed-not-submitted"
+  | "landed-partial"
   | "submitted-late"
   | "submitted-unconfirmed"
   | "unreadable";
@@ -149,24 +212,37 @@ export type ResolvedTarget = {
 function isAgentGone(at: ResolvedTarget | null): boolean {
   return at === null || !at.agentLabel || at.agentStatus === "unknown";
 }
+function classifyResidual(
+  box: BoxRead,
+  chunks: readonly string[],
+): SendVerdict | null {
+  const m = matchOwnBody(box, chunks);
+  if (m.kind === "same" || m.kind === "prefix") return "landed-not-submitted";
+  if (m.kind === "partial") return "landed-partial";
+  return null;
+}
 export function classifyVerdict(
   verify: SendVerify,
   trace: readonly TraceEntry[],
-  boxBody: string | null,
+  box: BoxRead | null,
   agentStatus: string | null,
   lateWorking: boolean,
   sendText: string,
 ): SendVerdict {
+  const chunks = splitChunks(sendText, SEND_CHUNK_MAX_BYTES);
   if (verify === "herdr-agent-working") {
     if (lateWorking || agentStatus === "working") return "submitted-late";
-    if (boxBody === null) return "unreadable";
-    if (boxBody !== "" && isSameBody(boxBody, sendText))
-      return "landed-not-submitted";
+    if (box === null) return "unreadable";
+    if (box.body !== "") {
+      const residual = classifyResidual(box, chunks);
+      if (residual !== null) return residual;
+    }
     return hasEnteredRound(trace) ? "submitted-unconfirmed" : "not-delivered";
   }
-  if (boxBody === null) return "unreadable";
-  if (boxBody !== "") {
-    if (isSameBody(boxBody, sendText)) return "landed-not-submitted";
+  if (box === null) return "unreadable";
+  if (box.body !== "") {
+    const residual = classifyResidual(box, chunks);
+    if (residual !== null) return residual;
     return hasEnteredRound(trace) ? "submitted-unconfirmed" : "not-delivered";
   }
   return hasEnteredRound(trace) ? "submitted-late" : "not-delivered";
@@ -194,11 +270,15 @@ export function inputReadyGate(
   let stage: StageId = "idle";
   let interstitialEnters = 0;
   let sawDialog = false;
-  const fail = (s: StageId): InputGateResult => {
+  const fail = (
+    s: StageId,
+    reason: GateFailReason = "timeout",
+  ): InputGateResult => {
     const at = sawDialog ? "dialog" : s;
-    ended.set(at, "timeout");
+    ended.set(at, reason === "timeout" ? "timeout" : "fail-closed");
     return {
       ok: false,
+      reason,
       stage: at,
       elapsedMs: Date.now() - startedAt,
       trace: rows(),
@@ -226,6 +306,11 @@ export function inputReadyGate(
     if (settled === "background-work") ended.set("idle", "background-work");
     const roundStartedAt = Date.now();
     const visible = herdr.readVisible(target);
+    if (detectInterstitial && WORKSPACE_TRUST_RE.test(visible)) {
+      sawDialog = true;
+      add("dialog", roundStartedAt);
+      return fail("dialog", "untrusted-workspace");
+    }
     if (
       detectInterstitial &&
       interstitialEnters < INTERSTITIAL_MAX_ENTERS &&
@@ -288,6 +373,19 @@ export class AgentSender {
       body = this.herdr.readBoxBody(pane);
     }
     return body;
+  }
+  private pollBoxRead(
+    pane: string,
+    timeoutMs: number,
+    pred: (box: BoxRead | null) => boolean,
+  ): BoxRead | null {
+    const deadline = Date.now() + timeoutMs;
+    let box = this.herdr.readBox(pane);
+    while (!pred(box) && Date.now() < deadline) {
+      sleepSync(this.timings.pollIntervalMs);
+      box = this.herdr.readBox(pane);
+    }
+    return box;
   }
   private waitAgentGone(timeoutMs: number): boolean {
     const deadline = Date.now() + timeoutMs;
@@ -387,7 +485,7 @@ export class AgentSender {
         mark(attempt, "enter", enterStartedAt, "timeout");
         continue;
       }
-      if (isSameBody(body, command)) {
+      if (matchOwnBody({ body, truncated: false }, [command]).kind === "same") {
         mark(attempt, "box", boxStartedAt, "ok");
         const enterStartedAt = Date.now();
         this.herdr.agentSendKeys(pane, "Enter");
@@ -403,7 +501,7 @@ export class AgentSender {
     }
     if (terminating && hasEnteredRound(trace) && isAgentGone(this.resolve()))
       return { ok: true, attempts, trace, evidence: "herdr-agent-gone" };
-    const boxBody = this.herdr.readBoxBody(pane);
+    const box = this.herdr.readBox(pane);
     const lastAgentStatus = this.herdr.agentGet(pane)?.agent_status ?? null;
     const detection = this.herdr.agentExplain(pane);
     return {
@@ -415,18 +513,19 @@ export class AgentSender {
       sendVerdict: classifyVerdict(
         "claude-box-cleared",
         trace,
-        boxBody,
+        box,
         lastAgentStatus,
         false,
         command,
       ),
       lastAgentStatus,
-      boxBody,
-      paneTail: this.paneTail(20),
+      boxBody: box?.body ?? null,
+      paneTail: this.paneTail(),
       detection,
     };
   }
   private sendVerifyWorking(sendText: string, pane: string): SendResult {
+    const chunks = splitChunks(sendText, SEND_CHUNK_MAX_BYTES);
     let attempts = 0;
     let verify: SendVerify = "herdr-agent-working";
     const trace: TraceEntry[] = [];
@@ -459,39 +558,69 @@ export class AgentSender {
           ? "claude-box-cleared"
           : "herdr-agent-working";
       const boxStartedAt = Date.now();
-      const body = this.pollBox(pane, t.boxReadyTimeoutMs, (b) => b !== null);
-      if (body === null) {
+      const box = this.pollBoxRead(
+        pane,
+        t.boxReadyTimeoutMs,
+        (b) => b !== null,
+      );
+      if (box === null) {
         mark(attempt, "box", boxStartedAt, "timeout");
         continue;
       }
-      if (body !== "") {
-        if (!isSameBody(body, sendText)) {
+      let from = 0;
+      if (box.body !== "") {
+        const m = matchOwnBody(box, chunks);
+        if (m.kind === "foreign") {
           mark(attempt, "box", boxStartedAt, "foreign");
           break;
         }
-        mark(attempt, "box", boxStartedAt, "ok");
-        const enterStartedAt = Date.now();
-        this.herdr.agentSendKeys(pane, "Enter");
-        if (submitted()) {
-          mark(attempt, "enter", enterStartedAt, "ok");
-          return { ok: true, attempts, trace, evidence };
+        if (m.kind === "partial") {
+          mark(attempt, "box", boxStartedAt, "partial");
+          break;
         }
-        mark(attempt, "enter", enterStartedAt, "timeout");
-        continue;
+        if (m.kind === "same") {
+          mark(attempt, "box", boxStartedAt, "ok");
+          const enterStartedAt = Date.now();
+          this.herdr.agentSendKeys(pane, "Enter");
+          if (submitted()) {
+            mark(attempt, "enter", enterStartedAt, "ok");
+            return { ok: true, attempts, trace, evidence };
+          }
+          mark(attempt, "enter", enterStartedAt, "timeout");
+          continue;
+        }
+        from = m.landed;
       }
       mark(attempt, "box", boxStartedAt, "ok");
       const typeStartedAt = Date.now();
-      this.herdr.paneSendText(pane, sendText);
-      const landed = this.pollBox(
-        pane,
-        t.landingTimeoutMs,
-        (b) => b !== null && b !== "",
-      );
-      if (landed === null || landed === "") {
-        mark(attempt, "type", typeStartedAt, "timeout");
-        continue;
+      let typed: TraceResult = chunks.length === 0 ? "timeout" : "ok";
+      for (let k = from; k < chunks.length; k++) {
+        this.herdr.paneSendText(pane, chunks[k]);
+        const want = k + 1;
+        const landed = this.pollBoxRead(pane, t.landingTimeoutMs, (b) => {
+          if (b === null || b.body === "") return false;
+          const m = matchOwnBody(b, chunks);
+          return want === chunks.length
+            ? m.kind === "same"
+            : m.kind === "prefix" && m.landed === want;
+        });
+        if (landed === null || landed.body === "") {
+          typed = "timeout";
+          break;
+        }
+        const m = matchOwnBody(landed, chunks);
+        if (m.kind === "partial" || m.kind === "foreign") {
+          typed = "partial";
+          break;
+        }
+        if (m.kind === "prefix" && m.landed < want) {
+          typed = "timeout";
+          break;
+        }
       }
-      mark(attempt, "type", typeStartedAt, "ok");
+      mark(attempt, "type", typeStartedAt, typed);
+      if (typed === "partial") break;
+      if (typed !== "ok") continue;
       const enterStartedAt = Date.now();
       this.herdr.agentSendKeys(pane, "Enter");
       if (submitted()) {
@@ -510,7 +639,7 @@ export class AgentSender {
         result: lateWorking ? "ok" : "timeout",
       });
     }
-    const boxBody = this.herdr.readBoxBody(pane);
+    const box = this.herdr.readBox(pane);
     const lastAgentStatus = this.herdr.agentGet(pane)?.agent_status ?? null;
     const detection = this.herdr.agentExplain(pane);
     return {
@@ -522,18 +651,18 @@ export class AgentSender {
       sendVerdict: classifyVerdict(
         verify,
         trace,
-        boxBody,
+        box,
         lastAgentStatus,
         lateWorking,
         sendText,
       ),
       lastAgentStatus,
-      boxBody,
-      paneTail: this.paneTail(20),
+      boxBody: box?.body ?? null,
+      paneTail: this.paneTail(),
       detection,
     };
   }
-  paneTail(lines: number): string {
-    return this.pane ? this.herdr.readRecent(this.pane, lines) : "";
+  paneTail(): string {
+    return this.pane ? this.herdr.readVisible(this.pane) : "";
   }
 }

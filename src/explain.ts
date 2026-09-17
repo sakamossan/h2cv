@@ -1,11 +1,19 @@
 import type { SendEvidence, SendVerdict, SendVerify } from "./sender.js";
 import type { Stage } from "./stages.js";
+import { SCREEN_DETECTION_FIELDS } from "./herdr-adapter.js";
+import {
+  BACKGROUND_WORK_RULE_IDS,
+  TERMINATING_SLASH_COMMANDS,
+  TURNLESS_SLASH_COMMANDS,
+} from "./sender.js";
 import {
   INPUT_READY_STAGE_IDS,
   LAUNCH_STAGES,
   PROBLEMS,
   RETIRED,
   SELF_SEND_STAGES,
+  SEND_CHUNK_MAX_BYTES,
+  SEND_MAX_ATTEMPTS,
   SEND_STAGES,
   TRACE_RESULTS,
 } from "./stages.js";
@@ -19,7 +27,8 @@ export type ErrorCode =
   | "server-protocol-mismatch"
   | "tab-create-failed"
   | "start-failed"
-  | "launch-timeout";
+  | "launch-timeout"
+  | "untrusted-workspace";
 export type Topic =
   | "overview"
   | "failure-modes"
@@ -39,6 +48,7 @@ export const ERROR_TOPIC = {
   "tab-create-failed": "launch-sequence",
   "start-failed": "launch-sequence",
   "launch-timeout": "input-ready",
+  "untrusted-workspace": "input-ready",
 } as const satisfies Record<ErrorCode, Topic>;
 export const VERIFY_ADVICE = {
   "herdr-agent-working": {
@@ -48,8 +58,7 @@ export const VERIFY_ADVICE = {
       "the grace stage is only entered on this side, so a late submit can still be picked up",
   },
   "claude-box-cleared": {
-    condition:
-      "a command that starts no turn (/clear / /rename / /exit / /quit), or any body on a round that was already working before the keystroke. Watches for the command disappearing from the box",
+    condition: `a command that starts no turn (${TURNLESS_SLASH_COMMANDS.join(" / ")}), or any body on a round that was already working before the keystroke. Watches for the command disappearing from the box`,
     advice:
       "there is no positive signal, so an empty terminal box is itself the evidence. No grace stage is entered",
   },
@@ -69,6 +78,12 @@ export const SEND_VERDICT_ADVICE = {
     condition: "your own body is still in the terminal box",
     advice:
       "the body arrived but was not submitted. Nothing was cleaned up (this layer never presses Ctrl+C), so empty the box before re-firing. Exception: a command that starts no turn fired while the child is working leaves the box occupied by the child's own turn, so the residual is expected and the keystrokes are queued to take effect when the turn ends. Confirm with an agent get (done / gone) before re-firing or killing",
+  },
+  "landed-partial": {
+    condition:
+      "a fragment of your body is in the terminal box (its head was lost, or a chunk was torn)",
+    advice:
+      "nothing was submitted and the fragment must not be: empty the box (or abandon the pane) before re-firing. Pressing Enter by hand would submit a truncated instruction",
   },
   "submitted-late": {
     condition:
@@ -103,8 +118,7 @@ export const EVIDENCE_ADVICE = {
   },
   "herdr-agent-gone": {
     condition: "claude left the terminal after the keystroke",
-    advice:
-      "terminating commands (/exit / /quit) only. Covers both a closed pane and a shell respawn, and is also where a confirmed exit dialog lands",
+    advice: `terminating commands (${TERMINATING_SLASH_COMMANDS.join(" / ")}) only. Covers both a closed pane and a shell respawn, and is also where a confirmed exit dialog lands`,
   },
 } as const satisfies Record<
   SendEvidence,
@@ -140,12 +154,12 @@ export const PROVENANCE = {
   paneTail: {
     origin: "herdr",
     upstream:
-      "the output of a screen read (agent read / pane read --source recent)",
+      "the output of a screen read (agent read / pane read --source visible)",
     handoff: "no — output text",
   },
-  "detection (state / region / manifestVersion / rules)": {
+  detection: {
     origin: "herdr",
-    upstream: "a summary of agent explain --json",
+    upstream: `a summary of agent explain --json (${SCREEN_DETECTION_FIELDS.join(" / ")})`,
     handoff: "no — output text",
   },
   stderr: {
@@ -228,9 +242,9 @@ const LAUNCH_PIPELINE_STAGES = LAUNCH_STAGES.filter(
   (s) => !INPUT_READY_STAGE_IDS.includes(s.id as never),
 );
 export const TESTED_WITH = {
-  claude: "2.1.246",
-  herdr: "0.8.2",
-  manifest: "2026.08.21.1",
+  claude: "2.1.274",
+  herdr: "0.9.0",
+  manifest: "2026.09.11.1",
 } as const;
 export const TOPICS: Record<
   Topic,
@@ -313,6 +327,9 @@ export const TOPICS: Record<
       "Ctrl+C appears in both tables and it is worth being explicit about which side it is on:",
       "this layer never presses it. A foreign body in the input box stops the send and gets",
       "reported; emptying the box is the caller's or a human's call.",
+      "",
+      "See also: h2cv explain overview (what the layer promises, and the four things it refuses",
+      "to hold)",
     ],
     tables: {
       problems: toRows("problem", PROBLEMS),
@@ -381,15 +398,14 @@ export const TOPICS: Record<
     tables: { provenance: toRows("field", PROVENANCE) },
   },
   "launch-sequence": {
-    summary:
-      "Startup is a pipeline of named stages with no branches: probe -> tab -> shell -> start -> agent -> the input-ready stages -> send. The destination is an exclusive choice between a cwd (which creates a dedicated tab) and an existing pane, and either way a probe handshake confirms the shell reached its prompt before the start is typed. There is no face for tearing down (closing what it started belongs to the layer that owns the resources)",
+    summary: `Startup is a pipeline of named stages with no branches: ${LAUNCH_PIPELINE_STAGES.map((s) => s.id).join(" -> ")} -> the input-ready stages -> send. The destination is an exclusive choice between a cwd (which creates a dedicated tab) and an existing pane, and either way a probe handshake confirms the shell reached its prompt before the start is typed. There is no face for tearing down (closing what it started belongs to the layer that owns the resources)`,
     body: [
       "Spec: source of truth is AgentLauncher in launcher.ts. Before the question of when it is",
       "safe to type comes the question of starting the session at all. The order is fixed so",
       "there is no room to slip a decision in between, and wrapping it in a server liveness probe",
       "in front and a send behind gives `h2cv launch` (source of truth: runLaunch in launch.ts).",
       "",
-      "The stage table below is that pipeline as far as the session being recognised; the four",
+      "The stage table below is that pipeline as far as the session being recognised; the",
       "stages that follow it are the input-ready column and have their own topic and their own",
       "table. Every failure JSON carries the stage it stopped in as `stage`, independently of the",
       "error code — the two are different axes, and the onLimit column is where they meet (two",
@@ -465,10 +481,10 @@ export const TOPICS: Record<
     tables: { stage: stageRows(LAUNCH_PIPELINE_STAGES) },
   },
   "input-ready": {
-    summary:
-      "Never treat idle as sufficient. Pass four stages in order: idle -> dialog -> box -> rc",
+    summary: `Never treat idle as sufficient. Pass the stages in order: ${INPUT_READY_STAGE_IDS.join(" -> ")}`,
     body: [
-      "Spec: source of truth is inputReadyGate in sender.ts and the stage registry in stages.ts.",
+      "Spec: source of truth is inputReadyGate in sender.ts and the stage registry",
+      "(LAUNCH_STAGES in stages.ts).",
       "herdr's agent_status == idle guarantees nothing beyond \"the claude process is up and is not",
       'processing anything". It cannot tell an idle right after startup, with the TUI not yet',
       "initialized, from an idle that finished initializing and is waiting for input; and since",
@@ -478,13 +494,27 @@ export const TOPICS: Record<
       "`/rc connecting` gone at +3412 ms). The send retry budget then burns down inside that",
       "window.",
       "",
-      "Invariant: after idle, pass the remaining stages before entering the send phase. The four",
-      "of them are called the input-ready stages, and the table below is the whole of it. The",
+      "Invariant: after idle, pass the remaining stages before entering the send phase. They",
+      "are called the input-ready stages, and the table below is the whole of it. The",
       "name carries no prefix on purpose: the first stage reads herdr's status and the other",
       "three read claude's screen, so claiming either prefix for the whole would misfile one of",
       "them.",
       "",
-      "Dialog detection is primarily herdr's agent_status == blocked, with the frozen values",
+      "Of the three first-run dialogs, exactly one must never be answered with Enter. The",
+      "workspace trust dialog puts its default on the refusal (in claude's binary cancelFirst and",
+      "focus: cancel are hardcoded true for it), so an Enter selects `No, exit` and claude leaves.",
+      "The gate therefore matches the trust wording (WORKSPACE_TRUST_RE in sender.ts) before",
+      "anything else on the round and closes the dialog stage without pressing, failing as",
+      "untrusted-workspace with a fail-closed row in the trace. Nothing is typed and the session",
+      "stays up. Granting trust is not this layer's to do, in either of the two ways claude itself",
+      "offers (accept the dialog once by hand, or set projects[<path>].hasTrustDialogAccepted in",
+      "~/.claude.json); both are spelled out in message on the failure. Reading that file up front",
+      "instead of the screen was rejected: claude decides trust per git repository, not per path —",
+      "a linked worktree inherits it from the repository it came from — and reimplementing that",
+      "here would be a second frozen value to keep in step.",
+      "",
+      "The other two are pressed through. Detection for them is primarily herdr's",
+      "agent_status == blocked, with the frozen values",
       "(INTERSTITIAL_RE) kept as a fallback for dialogs that stay classified as idle. Measured on",
       `claude ${TESTED_WITH.claude} / herdr ${TESTED_WITH.herdr} (manifest ${TESTED_WITH.manifest}), two of the three`,
       "first-run dialogs — workspace trust and the single-MCP one — report blocked (their footer",
@@ -492,22 +522,29 @@ export const TOPICS: Record<
       "returns agent_not_ready for them. The multi-MCP one stays idle with matched_rule null,",
       "because its footer reads `Space to select · Enter to confirm · Esc to reject all` and the",
       "rule requires `esc to cancel`; blocked alone would never clear it, which is why the frozen",
-      "values stay.",
+      "values stay. With trust taken out before the blocked check, the Enter cap",
+      "(INTERSTITIAL_MAX_ENTERS) is left guarding only a frozen value misfiring on the MCP side.",
       "",
       "The idle stage is not a single long wait. It is fired in slices of idleProbeSliceMs, and",
       "every slice that times out is followed by one agent explain. When the matched rule is one",
-      "of the background-work rules (BACKGROUND_WORK_RULE_IDS in sender.ts, today just",
-      "background_shell_working) and the prompt box is readable, the stage passes anyway and the",
+      "of the background-work rules (BACKGROUND_WORK_RULE_IDS in sender.ts, currently",
+      `${BACKGROUND_WORK_RULE_IDS.length === 0 ? "empty" : BACKGROUND_WORK_RULE_IDS.join(" / ")}) and the prompt box is readable, the stage passes anyway and the`,
       "trace carries a background-work row. Upstream says working; the pane accepts input all the",
-      "same. Since manifest 2026.08.21.1 a leftover run_in_background shell keeps agent_status at",
-      "working forever (priority 965, above the idle live_prompt_box at 950), and upstream calls",
-      "that intended, so without this the gate burns its whole budget",
-      "on a pane whose turn ended minutes ago. Being the matched rule is the evidence that",
-      "matters: everything above it, claude's own OSC title spinner (osc_title_working, 1100)",
-      "included, said not-working, and claude puts that title back to idle as soon as the turn",
-      "ends. That is also why background_agents_working is not in the set — measured on",
-      "2026-08-25 it does match, but the same screen carries the spinner title, so the matched",
-      "rule is osc_title_working and a live turn cannot be told apart from it.",
+      "same. The set is empty today, so that way out is armed but unreachable: manifest",
+      "2026.08.21.1 had a rule (background_shell_working, priority 965, above the idle",
+      "live_prompt_box at 950) that kept agent_status at working for as long as a",
+      "run_in_background shell was alive, and manifest 2026.09.04.1 dropped it. A pane whose turn",
+      "ended now matches live_prompt_box and settles on its own. The set is kept rather than",
+      "removed because upstream has not settled: the sibling rules for background agents and",
+      "background MCP tasks are still working at the same priority, so a shell is the only one of",
+      "the three that reports idle, and that asymmetry may be reverted.",
+      "",
+      "Being the matched rule is the evidence that matters for anything added back to the set:",
+      "everything above it, claude's own OSC title spinner (osc_title_working, 1100) included,",
+      "said not-working, and claude puts that title back to idle as soon as the turn ends. That is",
+      "also why background_agents_working was never in it — measured on 2026-08-25 it does match,",
+      "but the same screen carries the spinner title, so the matched rule is osc_title_working and",
+      "a live turn cannot be told apart from it.",
       "",
       "If agent explain cannot be read at all, the wait is folded rather than continued: a",
       "classification that cannot be read leaves no way to judge the way out, and returning the",
@@ -551,7 +588,9 @@ export const TOPICS: Record<
       "",
       "The onLimit column names launch-timeout because that is the code on the launch path. Run on",
       "its own (`h2cv wait-input-ready`) the same stages fail as not-ready instead; the codes",
-      "differ only so the caller can tell whether a session was started at all. The stages run",
+      "differ only so the caller can tell whether a session was started at all. untrusted-workspace",
+      "keeps its name on both paths, because it names what was on the screen rather than which",
+      "budget ran out. The stages run",
       "exactly once per launch, and there is no second pass before the send.",
       "",
       "See also: h2cv wait-input-ready (--pane <paneId> | --agent-name <name>) [--timeout <ms>] [--detect-interstitial]",
@@ -646,12 +685,26 @@ export const TOPICS: Record<
       "- The box region is the range between the borders. When the body overflows vertically the",
       "  top border scrolls off screen, so if no top is found, every visible line above the bottom",
       "  is treated as body (only the tail end is readable then)",
+      "- When the top border and the prompt marker are visible the whole body is on screen, so the",
+      "  read-back must match it exactly; the suffix rule applies only while the top has scrolled",
+      "  off. A tail that arrived without its head is a short, fully visible box, and is reported",
+      "  as partial",
       "- When the input box is empty the TUI draws a placeholder hint in dim (SGR 2). The wording",
       "  is a frozen value that changes with the version, so string matching cannot catch it, but",
       '  the rendering distinction "hints are dim, real input is unstyled" works as a structural',
       "  signal, so the dim ranges are dropped before deciding emptiness",
       "",
-      "The attempt limit stays at 5 and is not raised — the observation that it is close to the",
+      `The body is typed in chunks of at most ${SEND_CHUNK_MAX_BYTES} bytes, and each chunk is appended only`,
+      "after a read-back shows the box holding exactly the chunks before it. Two measured limits",
+      "sit above that number. A single write to the pty master is cut at the raw queue's",
+      "high-water mark (1022 bytes on macOS, 4095 on Linux), so a longer body reaches the",
+      "recipient as several reads; and a read carrying more than 800 characters is taken as a",
+      "paste, which right after the box is drawn can leave nothing behind at all. One chunk being",
+      "one read makes it binary — the whole chunk arrives or none of it does — and the empty",
+      "read-back of the latter is picked up by the retype path that already exists. A byte count",
+      "is never below a character count, so a single byte bound satisfies both limits.",
+      "",
+      `The attempt limit stays at ${SEND_MAX_ATTEMPTS} and is not raised — the observation that it is close to the`,
       "limit is itself the alarm. Since polling removes idle rounds, attempts pins to 1 and the",
       "alarm loses resolution, so read the per-stage ms in trace instead (even at attempt 1, a",
       "stage whose ms is pinned at its bound reveals the anomaly).",
@@ -696,7 +749,7 @@ export const TOPICS: Record<
       "resolves them (the box cannot be read, or the picker is read as a foreign residual). The",
       "caller's available decisions do not change, so they are not added to the list.",
       "",
-      "Only terminating commands (/exit and its alias /quit; the frozen list is",
+      `Only terminating commands (${TERMINATING_SLASH_COMMANDS.join(" / ")}; the frozen list is`,
       "TERMINATING_SLASH_COMMANDS in sender.ts) widen the success test beyond the box going empty",
       'to also cover "claude left that terminal after the keystroke". The terminal state is not',
       "singular there — the pane may close, or stay while the shell respawns in it — so the",
@@ -721,7 +774,7 @@ export const TOPICS: Record<
       '(boxBody / lastAgentStatus / paneTail); it layers "how herdr classified it" on top of "what',
       'was visible". Even with sendVerdict=not-delivered, a state=blocked means a screen blocking',
       "input was up, so the judgement that it is safe to re-fire does not hold as-is: read the",
-      "screen with `herdr agent read <pane> --source recent` to confirm nobody is part-way through",
+      "screen with `herdr agent read <pane> --source visible` to confirm nobody is part-way through",
       "answering, close the screen with `herdr agent send-keys <pane> esc`, then send again.",
       "Conversely, if the winning rule is an ordinary prompt box and the send still does not go",
       "through, suspect the send side (width exhaustion, bracketed paste) rather than the screen.",
@@ -792,10 +845,13 @@ export const TOPICS: Record<
       "by the subcommand that was run.",
       "",
       "The idle wait shares its helper with the input-ready gate, so the background-work way out",
-      "applies here too: a session that finished its work with a run_in_background shell still",
-      "alive is classified as working forever, and without it nothing would ever be typed.",
-      "Measured on 2026-08-25 that was exactly what happened — 300 s of budget spent, then",
-      "not-ready with stage=idle and detection.matchedRule.id background_shell_working.",
+      "applies here too, and so does the slicing that folds an unreadable classification early.",
+      "A session that finished its work with a run_in_background shell still alive used to be",
+      "classified as working forever, and nothing would ever be typed: measured on 2026-08-25,",
+      "300 s of budget spent, then not-ready with stage=idle and detection.matchedRule.id",
+      "background_shell_working. Manifest 2026.09.04.1 dropped that rule, so the same pane now",
+      "matches live_prompt_box and the wait returns on its own (measured 2026-09-07); the way out",
+      "stays in place, with an empty set, in case upstream reverts.",
       "",
       "Getting past that gate is not the same as the session ending. From claude 2.1.243 an",
       "`/exit` with a live background shell opens a confirmation dialog (Exit and stop tasks /",

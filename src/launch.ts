@@ -4,11 +4,17 @@ import type { StageId, TraceEntry, TraceResult } from "./stages.js";
 import type { SessionTimings } from "./timings.js";
 import { basename } from "node:path";
 import {
+  PROBE_UNAVAILABLE_MESSAGE,
   SERVER_DOWN_MESSAGE,
   SERVER_PROTOCOL_MISMATCH_MESSAGE,
 } from "./herdr-adapter.js";
 import { AgentLauncher } from "./launcher.js";
-import { AgentSender, lastStage, snapshotFields } from "./sender.js";
+import {
+  AgentSender,
+  lastStage,
+  snapshotFields,
+  UNTRUSTED_WORKSPACE_MESSAGE,
+} from "./sender.js";
 
 export type LaunchDestination =
   | {
@@ -101,12 +107,17 @@ export function runLaunch(req: LaunchRequest, deps: LaunchDeps): LaunchResult {
   const shellStartedAt = Date.now();
   const shell = launcher.waitShellReady(paneId);
   if (!shell.ok) {
-    mark("shell", shellStartedAt, "timeout");
+    const unavailable = shell.reason === "probe-unavailable";
+    const counts = `probeCount=${shell.probeCount}, elapsedMs=${shell.elapsedMs}`;
+    mark("shell", shellStartedAt, unavailable ? "unavailable" : "timeout");
     return fail("start-failed", "shell", {
       agentName,
-      stderr: `shell-not-ready: pane ${paneId} did not answer the probe handshake (probeCount=${shell.probeCount}, elapsedMs=${shell.elapsedMs})`,
+      stderr: unavailable
+        ? `shell-probe-unavailable: the probe wait for pane ${paneId} returned without waiting (${counts})`
+        : `shell-not-ready: pane ${paneId} did not answer the probe handshake (${counts})`,
       probeCount: shell.probeCount,
       paneTail: shell.paneTail,
+      ...(unavailable ? { message: PROBE_UNAVAILABLE_MESSAGE } : {}),
       trace,
     });
   }
@@ -125,18 +136,24 @@ export function runLaunch(req: LaunchRequest, deps: LaunchDeps): LaunchResult {
   const readiness = launcher.waitReadiness(paneId);
   trace.push(...readiness.trace);
   if (!readiness.ok) {
-    return readiness.kind === "agent-vanished"
-      ? fail("agent-vanished", readiness.stage, {
-          agentName,
-          trace,
-        })
-      : fail("launch-timeout", readiness.stage, {
-          agentName,
-          timeoutMs: readiness.timeoutMs,
-          paneTail: readiness.paneTail,
-          detection: readiness.detection,
-          trace,
-        });
+    if (readiness.kind === "agent-vanished")
+      return fail("agent-vanished", readiness.stage, { agentName, trace });
+    if (readiness.kind === "untrusted-workspace")
+      return fail("untrusted-workspace", readiness.stage, {
+        agentName,
+        pane: paneId,
+        message: UNTRUSTED_WORKSPACE_MESSAGE,
+        paneTail: readiness.paneTail,
+        detection: readiness.detection,
+        trace,
+      });
+    return fail("launch-timeout", readiness.stage, {
+      agentName,
+      timeoutMs: readiness.timeoutMs,
+      paneTail: readiness.paneTail,
+      detection: readiness.detection,
+      trace,
+    });
   }
   const pane = readiness.pane;
   const readyMs = readiness.elapsedMs;

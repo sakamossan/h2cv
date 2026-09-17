@@ -12,6 +12,7 @@ import {
   inputReadyGate,
   lastStage,
   snapshotFields,
+  UNTRUSTED_WORKSPACE_MESSAGE,
 } from "./sender.js";
 import { DEFAULT_SESSION_TIMINGS } from "./timings.js";
 
@@ -134,7 +135,7 @@ const CATALOG = {
         {
           name: "--detect-interstitial",
           summary:
-            "Clear the first-run dialog with Enter (fresh-launch path only; it misfires on an existing pane)",
+            "Clear the first-run dialog with Enter, except the workspace trust one, which fails as untrusted-workspace without pressing anything (fresh-launch path only; it misfires on an existing pane)",
         },
       ],
       summary:
@@ -400,25 +401,29 @@ export function run(
         Date.now() + timeoutMs,
         parsed.values["detect-interstitial"] === true,
       );
-      return gate.ok
-        ? jsonOut(0, {
-            ok: true,
-            target,
-            elapsedMs: gate.elapsedMs,
-            trace: gate.trace,
-          })
-        : fail(
-            {
-              ok: false,
-              error: "not-ready",
-              target,
-              stage: gate.stage,
-              elapsedMs: gate.elapsedMs,
-              trace: gate.trace,
-              detection: gate.detection,
-            },
-            `wait-input-ready ${target}: not-ready — stage=${gate.stage} (${gate.elapsedMs}ms; read the screen classification with \`| jq .detection\`)`,
-          );
+      if (gate.ok)
+        return jsonOut(0, {
+          ok: true,
+          target,
+          elapsedMs: gate.elapsedMs,
+          trace: gate.trace,
+        });
+      const untrusted = gate.reason === "untrusted-workspace";
+      return fail(
+        {
+          ok: false,
+          error: untrusted ? "untrusted-workspace" : "not-ready",
+          target,
+          stage: gate.stage,
+          elapsedMs: gate.elapsedMs,
+          trace: gate.trace,
+          ...(untrusted ? { message: UNTRUSTED_WORKSPACE_MESSAGE } : {}),
+          detection: gate.detection,
+        },
+        untrusted
+          ? `wait-input-ready ${target}: untrusted-workspace — stage=${gate.stage} (${gate.elapsedMs}ms; nothing was pressed, read the recovery in \`| jq -r .message\`)`
+          : `wait-input-ready ${target}: not-ready — stage=${gate.stage} (${gate.elapsedMs}ms; read the screen classification with \`| jq .detection\`)`,
+      );
     }
     case "self-send": {
       const out = selfSend(rest, herdr, selfSendEnv);

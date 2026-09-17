@@ -101,7 +101,7 @@ export function selfSend(
         stage: SELF_SEND_GATES[0],
         timeoutMs: SELF_SEND_IDLE_TIMEOUT_MS,
         elapsedMs: Date.now() - waitStartedAt,
-        paneTail: herdr.readRecent(pane, 20),
+        paneTail: herdr.readVisible(pane),
         detection: herdr.agentExplain(pane),
       },
       summary: `self-send ${pane}: not-ready — stage=idle (${Date.now() - waitStartedAt}ms; read the screen classification with \`| jq .detection\`)`,

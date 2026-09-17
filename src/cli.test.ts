@@ -1,7 +1,7 @@
 import type { ScreenDetection } from "./herdr-adapter.js";
 import type { HerdrPort } from "./launcher.js";
 import { describe, expect, it, vi } from "vitest";
-import { fakeHerdrPort } from "./__tests__/fakes.js";
+import { fakeHerdrPort, fixedBox } from "./__tests__/fakes.js";
 import { run } from "./cli.js";
 import { hintFor, TOPICS } from "./explain.js";
 
@@ -334,11 +334,11 @@ function boxClearedUnverifiedHerdr() {
   let cleared = false;
   return {
     ...liveHerdr(),
-    readBoxBody: () => {
+    ...fixedBox(() => {
       if (!cleared) return "書きかけの下書き";
       cleared = false;
       return "";
-    },
+    }),
     paneSendKeys: (_pane: string, keys: string) => {
       if (keys === "C-c") cleared = true;
     },
@@ -363,7 +363,7 @@ describe("h2cv send (ターンを始めないコマンド)", () => {
       paneRun: () => {
         exited = true;
       },
-      readBoxBody: () => (exited ? null : ""),
+      ...fixedBox(() => (exited ? null : "")),
       agentGet: () =>
         exited ? null : { pane_id: PANE, terminal_id: PANE, agent: "claude" },
     });
@@ -450,6 +450,27 @@ describe("h2cv wait-input-ready", () => {
       stage: "idle",
       detection: null,
     });
+  });
+  it("trust ダイアログを踏んだら not-ready ではなく untrusted-workspace (#2865)", () => {
+    const agentSendKeys = vi.fn();
+    const herdr = {
+      ...liveHerdr(),
+      readVisible: () => " Yes, I trust this folder",
+      agentSendKeys,
+    };
+    const r = run(
+      ["wait-input-ready", "--pane", PANE, "--detect-interstitial"],
+      herdr,
+    );
+    expect(r.exitCode).toBe(1);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      ok: false,
+      error: "untrusted-workspace",
+      stage: "dialog",
+      hint: "h2cv explain input-ready",
+    });
+    expect(JSON.parse(r.stdout).message).toContain("hasTrustDialogAccepted");
+    expect(agentSendKeys).not.toHaveBeenCalled();
   });
   it("herdr が画面を分類できていれば detection として載せる (#1864)", () => {
     const herdr = {

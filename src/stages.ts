@@ -16,9 +16,12 @@ export type TraceResult =
   | "ok"
   | "timeout"
   | "foreign"
+  | "partial"
   | "gone"
   | "fail-open"
-  | "background-work";
+  | "fail-closed"
+  | "background-work"
+  | "unavailable";
 export type StageId =
   | "probe"
   | "tab"
@@ -45,6 +48,7 @@ export const SEND_VERIFY_TIMEOUT_MS = 6000;
 export const SEND_GRACE_MS = 10000;
 export const SELF_SEND_IDLE_TIMEOUT_MS = 300000;
 export const SEND_MAX_ATTEMPTS = 5;
+export const SEND_CHUNK_MAX_BYTES = 800;
 export const INTERSTITIAL_MAX_ENTERS = 5;
 export const EXIT_DIALOG_MAX_ENTERS = 1;
 const BUDGETS = {
@@ -90,7 +94,10 @@ export type ProblemId =
   | "P28"
   | "P29"
   | "P30"
-  | "P31";
+  | "P31"
+  | "P32"
+  | "P33"
+  | "P34";
 export type Problem = {
   symptom: string;
   mechanism: string;
@@ -182,7 +189,7 @@ export const PROBLEMS = {
     mechanism:
       "A text dump emits wide characters cell by cell with spaces between them. An empty input box holds a dim placeholder hint",
     defence:
-      "Read as ansi, drop the dim ranges, and compare with all whitespace stripped. A suffix match counts as identical too",
+      "Read as ansi, drop the dim ranges, and compare with all whitespace stripped. A suffix match counts as identical only while the top border is off screen",
     stage: "cross-cutting",
   },
   P11: {
@@ -346,9 +353,9 @@ export const PROBLEMS = {
     symptom:
       "A pane whose turn is over never goes idle, so the gate burns the whole budget and the send never happens",
     mechanism:
-      "From manifest 2026.08.21.1 herdr classifies a leftover run_in_background shell as working (background_shell_working, priority 965, above live_prompt_box at 950). Upstream calls it intended, so it will not change",
+      "From manifest 2026.08.21.1 herdr classified a leftover run_in_background shell as working (background_shell_working, priority 965, above live_prompt_box at 950). Manifest 2026.09.04.1 dropped that rule, so a pane whose turn ended matches live_prompt_box again and this no longer happens for a shell. Upstream has not settled it: the sibling rules for background agents and background MCP tasks are still working at the same priority",
     defence:
-      "Slice the idle wait, read agent explain on every slice that times out, and treat it as idle when the matched rule is background work and the prompt box is readable. Being the matched rule is itself the evidence that every higher-priority working rule (claude's own OSC title spinner included) said otherwise",
+      "Slice the idle wait, read agent explain on every slice that times out, and treat it as idle when the matched rule is background work and the prompt box is readable. Being the matched rule is itself the evidence that every higher-priority working rule (claude's own OSC title spinner included) said otherwise. The rule set (BACKGROUND_WORK_RULE_IDS) is empty while the shell rule is gone, so the defence is armed but idle; a revert upstream is one line to restore",
     stage: "idle (launch / self-send)",
   },
   P30: {
@@ -368,6 +375,33 @@ export const PROBLEMS = {
     defence:
       "When the agent_status captured at the top of the round is working, take the box clearing as the evidence for that round instead of the transition to working. The grace stage after the attempt limit is skipped for the same reason",
     stage: "enter / grace",
+  },
+  P32: {
+    symptom:
+      "The probe handshake types thousands of probes into the pane and then fails as if it had waited out its budget",
+    mechanism:
+      "A herdr without `pane wait-output` (it landed in 0.8.2) prints the usage and exits non-zero straight away, and folding every non-zero into a plain timeout reads that as the keystroke having been eaten. Each round then loses the wait that gave it its thickness, so the loop spins through the whole budget typing one more probe per turn (measured: 3156 in 30 s). A pane that is gone or a server that stopped answering returns the same way",
+    defence:
+      "Tell the three apart by whether the budget was spent rather than by the upstream error code, and when the wait could not be entered at all stop instead of typing again, reporting it as shell-probe-unavailable with an unavailable row in the trace",
+    stage: "shell",
+  },
+  P33: {
+    symptom:
+      "The gate that is supposed to clear first-run dialogs terminates the session instead, and the launch fails seconds into a budget of minutes",
+    mechanism:
+      "The workspace trust dialog is the one first-run dialog whose default choice is the refusal (cancelFirst and focus: cancel are hardcoded true, so Enter selects `No, exit`). Pressing Enter on it answers the question with no and claude exits, after which the gate is waiting on a pane that no longer holds an agent",
+    defence:
+      "Match the trust wording before the blocked check and close the stage without pressing anything, reporting untrusted-workspace with a fail-closed row in the trace. Granting the trust is not this layer's to do, so the recovery is handed to the caller in message",
+    stage: "dialog (launch)",
+  },
+  P34: {
+    symptom:
+      "A long body arrives with its head cut off, and the send reports success because the tail alone made the box non-empty",
+    mechanism:
+      "A body above the pty's raw-queue high-water mark (1022 bytes on macOS) is written in two pieces, so the recipient reads it twice. A read carrying more than 800 characters is taken as a paste, and right after the box is drawn such a read leaves nothing behind — neither the text nor its placeholder — while the second read lands as ordinary typing. The landing check only asked for a non-empty box, and the suffix rule meant for a vertically overflowing box also accepted a tail",
+    defence:
+      "Read the box back against the body, requiring an exact match whenever the top border is visible (suffix only when it scrolled off), and type the body in chunks below both limits, appending each one only after the read-back shows exactly the chunks before it. A fragment cut anywhere else stops the send without pressing Enter, as partial",
+    stage: "type",
   },
 } as const satisfies Record<ProblemId, Problem>;
 export type RetiredId =
@@ -494,14 +528,14 @@ export const LAUNCH_STAGES = [
     observes: ["claude-screen"],
     predicate:
       "types `echo h2cv''-shell-ready-<nonce>` and h2cv-shell-ready-<nonce> appears on the visible frame",
-    maxAttempts: WITHIN_BUDGET,
+    maxAttempts: `${WITHIN_BUDGET}, but 1 when the wait cannot be entered`,
     interval: budget("shellProbeWaitMs"),
     timeout: budget("shellReadyTimeoutMs"),
     onLimit:
-      "fail-closed: start-failed (stderr starts with shell-not-ready, and probeCount / paneTail are attached)",
+      "fail-closed: start-failed (stderr starts with shell-not-ready, or with shell-probe-unavailable when the wait could not be entered, which also leaves an unavailable row in the trace; probeCount / paneTail are attached)",
     advice:
-      "The start was never typed. The pane never reached its prompt, so read paneTail and suspect the rc; the tab is the caller's to reclaim",
-    defends: ["P13"],
+      "The start was never typed. shell-not-ready means the pane never reached its prompt, so read paneTail and suspect the rc; shell-probe-unavailable means the wait itself did not run (a herdr too old for pane wait-output, a pane that is gone, a server that stopped answering), so read message and fix that first. Either way the tab is the caller's to reclaim",
+    defends: ["P13", "P32"],
   },
   {
     id: "start",
@@ -555,15 +589,15 @@ export const LAUNCH_STAGES = [
     kind: "act+verify",
     observes: ["herdr-agent-status", "claude-screen"],
     predicate:
-      "agent_status is not blocked (primary) and the frozen dialog wording is absent from the visible frame (fallback). If false, press Enter",
-    maxAttempts: `${INTERSTITIAL_MAX_ENTERS}`,
+      "the frozen workspace-trust wording is absent from the visible frame, and then agent_status is not blocked (primary) with the remaining frozen dialog wording absent (fallback). If the trust wording is there nothing is pressed; if only the rest is false, press Enter",
+    maxAttempts: `${INTERSTITIAL_MAX_ENTERS}, and 0 for workspace trust`,
     interval: budget("interstitialSettleMs"),
     timeout: budget("inputReadyTimeoutMs"),
     onLimit:
-      "fail-open: defer to the next gates (what was observed stays in the trace as a dialog row)",
+      "fail-closed: untrusted-workspace for workspace trust, decided on the wording rather than on a limit. Otherwise fail-open: defer to the next gates (what was observed stays in the trace as a dialog row)",
     advice:
-      "The dialog does not clear on Enter, or it is classified as neither blocked nor a frozen value. Escalate to a human and compare detection against the real screen",
-    defends: ["P5", "P27"],
+      "untrusted-workspace means the session is up and untouched, and firing again unchanged will stop in the same place: read message, grant trust, then fire again. Otherwise the dialog does not clear on Enter, or it is classified as neither blocked nor a frozen value — escalate to a human and compare detection against the real screen",
+    defends: ["P5", "P27", "P33"],
   },
   {
     id: "box",
@@ -638,31 +672,30 @@ export const SEND_STAGES = [
     kind: "gate",
     observes: ["claude-screen"],
     predicate:
-      "readBoxBody(pane) is not null. The value that was read branches four ways (empty / your own body / a foreign body / undecidable)",
+      "readBox(pane) is not null. The value that was read branches five ways (empty / your own body / a chunk-boundary prefix of it / a fragment of it / a foreign body), plus undecidable",
     maxAttempts: WITHIN_BUDGET,
     interval: budget("pollIntervalMs"),
     timeout: budget("boxReadyTimeoutMs"),
     onLimit:
-      "next attempt (result timeout). A foreign body leaves the loop immediately with result foreign",
+      "next attempt (result timeout). A foreign body leaves the loop immediately with result foreign, a fragment of your own body with result partial. A chunk-boundary prefix resumes typing from the next chunk",
     advice:
       "Nothing was typed on that round. A foreign body is reported in boxBody / paneTail / detection, and emptying the box is the caller's or a human's call",
-    defends: ["P7", "P8", "P25"],
+    defends: ["P7", "P8", "P25", "P34"],
   },
   {
     id: "type",
     name: "claude-box-landed",
     kind: "act+verify",
     observes: ["claude-screen"],
-    predicate:
-      "`pane send-text` types the body and readBoxBody comes back non-empty",
+    predicate: `\`pane send-text\` types the body in chunks of at most ${SEND_CHUNK_MAX_BYTES} bytes, and after each chunk readBox comes back holding exactly the chunks typed so far (a suffix of them when the top border is off screen)`,
     maxAttempts: WITHIN_BUDGET,
     interval: budget("pollIntervalMs"),
     timeout: budget("landingTimeoutMs"),
     onLimit:
-      "next attempt (result timeout). The next round retypes only after a read-back showing the box is empty, so nothing gets concatenated",
+      "next attempt (result timeout). The next round resumes from the first chunk the read-back does not account for, so nothing gets concatenated. A fragment cut anywhere other than a chunk boundary leaves the loop at once with result partial, without pressing Enter",
     advice:
-      "The body was typed but its landing could not be read back. Nothing was submitted",
-    defends: ["P3"],
+      "The body was typed but its landing could not be read back. Nothing was submitted. A partial row means a fragment of the body is in the box; do not submit it, empty the box before re-firing",
+    defends: ["P3", "P34"],
   },
   {
     id: "enter",
@@ -756,6 +789,11 @@ export const TRACE_RESULTS = {
     meaning: "the box held a body that was not the one being sent",
     stages: "box (send)",
   },
+  partial: {
+    meaning:
+      "the box held a fragment of the body being sent, cut somewhere other than a chunk boundary, so nothing was pressed",
+    stages: "box / type (send)",
+  },
   gone: {
     meaning: "the target disappeared",
     stages: "alive (send) / agent (launch)",
@@ -764,10 +802,20 @@ export const TRACE_RESULTS = {
     meaning: "the limit was reached but the next stage was entered anyway",
     stages: "dialog / rc / start (agent_not_ready)",
   },
+  "fail-closed": {
+    meaning:
+      "the predicate did not hold and the stage was closed without acting, because the act would have been destructive on that screen",
+    stages: "dialog (launch)",
+  },
   "background-work": {
     meaning:
       "the predicate did not hold, but agent explain showed the only thing keeping the agent at working was background work, so the next stage was entered",
     stages: "idle (launch / self-send)",
+  },
+  unavailable: {
+    meaning:
+      "the wait could not be entered at all, so the budget was never spent and the probe was not typed again",
+    stages: "shell (launch)",
   },
 } as const satisfies Record<
   TraceResult,

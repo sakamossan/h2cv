@@ -30,7 +30,6 @@ const TEST_TIMINGS: SessionTimings = {
 function readinessHerdr(opts: {
   box?: () => string | null;
   visible?: () => string;
-  recent?: () => string;
   idle?: () => boolean;
   agent?: () => {
     pane_id?: string;
@@ -49,7 +48,6 @@ function readinessHerdr(opts: {
     ),
     waitIdleOrBlocked: vi.fn(() => true),
     waitIdle: vi.fn(opts.idle ?? (() => true)),
-    readRecent: vi.fn(opts.recent ?? (() => "")),
     readBoxBody: vi.fn(opts.box ?? (() => "")),
     readVisible: vi.fn(opts.visible ?? (() => "")),
     agentSendKeys: vi.fn(),
@@ -91,7 +89,7 @@ describe("AgentLauncher.waitReadiness", () => {
     expect(reads).toBe(3);
   });
   it("herdr は受け取った pane id 宛てに引く (agent 名では引かない #2520)", () => {
-    const herdr = readinessHerdr({ recent: () => "" });
+    const herdr = readinessHerdr({ visible: () => "" });
     launcher(herdr).waitReadiness(PANE);
     expect(herdr.agentGet).toHaveBeenCalledWith(PANE);
     expect(herdr.waitIdleOrBlocked).toHaveBeenCalledWith(
@@ -116,7 +114,7 @@ describe("AgentLauncher.waitReadiness", () => {
         clock.advance(60000);
         return null;
       },
-      recent: () => "画面はまだ何も描かれていない",
+      visible: () => "画面はまだ何も描かれていない",
     });
     expect(launcher(herdr).waitReadiness(PANE)).toMatchObject({
       ok: false,

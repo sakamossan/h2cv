@@ -5,7 +5,9 @@ import { execNg, execOk, fakeExec } from "./__tests__/fakes.js";
 import {
   HerdrAdapter,
   herdrErrorCode,
+  parseBox,
   parseBoxBody,
+  sleepSync,
   summarizeDetection,
 } from "./herdr-adapter.js";
 
@@ -49,26 +51,48 @@ describe("parseBoxBody", () => {
   it("罫線が 1 本も無ければ判定不能として null を返す", () => {
     expect(parseBoxBody("no box here\r\njust text\r\n")).toBeNull();
   });
+  it("セッション名を咥えた上端の罫線も上端として認める (#3205)", () => {
+    const labeled = `${"─".repeat(94)} h2cv-3205 ─`;
+    const dump = [labeled, "❯ hello world", RULE, ...STATUS].join("\r\n");
+    expect(parseBox(dump)).toEqual({ body: "hello world", truncated: false });
+  });
+  it("ラベル付きの罫線は下端としては採らない (緩めるのは上端だけ。#3205)", () => {
+    const labeled = `${"─".repeat(94)} h2cv-3205 ─`;
+    const dump = [RULE, "❯ hello", labeled, ...STATUS].join("\r\n");
+    expect(parseBoxBody(dump)).toBe("");
+  });
+  it("上端の罫線が見つかれば truncated: false (本文は全部画面内。#3205)", () => {
+    expect(parseBox(screen("❯ hello world"))).toEqual({
+      body: "hello world",
+      truncated: false,
+    });
+  });
+  it("下端の罫線しか無ければ truncated: true (読めたのは末尾側だけ。#3205)", () => {
+    const dump = ["  line 39", "  line 40", RULE, ...STATUS].join("\r\n");
+    expect(parseBox(dump)).toEqual({
+      body: "line 39 line 40",
+      truncated: true,
+    });
+  });
   it("workspace trust ダイアログは null ではなく空本文を返す (#1792)", () => {
     const AMBER = "\u001B[0m\u001B[38;2;255;193;7m";
     const GREY = "\u001B[0m\u001B[38;2;153;153;153m";
     const dump = [
       "",
-      `${AMBER}${"─".repeat(80)}\x1b[0m`,
+      `${AMBER}${"─".repeat(120)}\x1b[0m`,
       ` ${AMBER}\x1b[1mAccessing workspace:\x1b[0m`,
       "",
-      " \u001B[0m\u001B[1m/var/tmp/trust-probe-1792\u001B[0m",
+      " \u001B[0m\u001B[1m/home/you/trust-probe\u001B[0m",
       "",
-      " Quick safety check: Is this a project you created or one you trust? (Like your",
-      " own code, a well-known open source project, or work from your team). If not,",
-      " take a moment to review what's in this folder first.",
+      " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+      " project, or work from your team). If not, take a moment to review what's in this folder first.",
       "",
       " Claude Code'll be able to read, edit, and execute files here.",
       "",
       ` ${GREY}Security guide\x1b[0m`,
       "",
-      ` \x1b[0m\x1b[38;2;177;185;249m❯ ${GREY}1. \x1b[0m\x1b[38;2;177;185;249mYes, I trust this folder\x1b[0m`,
-      `   ${GREY}2. \x1b[0mNo, exit`,
+      ` \x1b[0m\x1b[38;2;177;185;249m❯ No, exit\x1b[0m`,
+      "   Yes, I trust this folder",
       "",
       ` ${GREY}Enter to confirm · Esc to cancel\x1b[0m`,
     ].join("\r\n");
@@ -104,9 +128,32 @@ describe("HerdrAdapter.readBoxBody", () => {
     const client = new HerdrAdapter(fakeExec(() => execOk("box が無い画面")));
     expect(client.readBoxBody("w1:p1")).toBeNull();
   });
+  it("readBox は readBoxBody と同じ argv で読み、truncated まで返す (#3205)", () => {
+    let seen: string[] = [];
+    const client = new HerdrAdapter(
+      fakeExec((bin, args) => {
+        if (bin !== "herdr" || args[1] !== "read") return undefined;
+        seen = args;
+        return execOk(screen("❯ hello"));
+      }),
+    );
+    expect(client.readBox("w1:p1")).toEqual({
+      body: "hello",
+      truncated: false,
+    });
+    expect(seen).toEqual([
+      "agent",
+      "read",
+      "w1:p1",
+      "--source",
+      "visible",
+      "--format",
+      "ansi",
+    ]);
+  });
 });
-describe("HerdrAdapter.readRecent", () => {
-  it("宛先へ recent を行数指定で読み、stdout をそのまま返す", () => {
+describe("HerdrAdapter.readVisible", () => {
+  it("宛先の visible frame を text で読み、stdout をそのまま返す", () => {
     let seen: string[] = [];
     const client = new HerdrAdapter(
       fakeExec((bin, args) => {
@@ -115,20 +162,46 @@ describe("HerdrAdapter.readRecent", () => {
         return execOk("tail line\n");
       }),
     );
-    expect(client.readRecent("w1:p1", 20)).toBe("tail line\n");
+    expect(client.readVisible("w1:p1")).toBe("tail line\n");
     expect(seen).toEqual([
       "agent",
       "read",
       "w1:p1",
       "--source",
-      "recent",
-      "--lines",
-      "20",
+      "visible",
+      "--format",
+      "text",
     ]);
   });
   it("読めなければ空文字 (診断出力なので判定不能と区別しない)", () => {
     const client = new HerdrAdapter(fakeExec(() => execNg("agent not found")));
-    expect(client.readRecent("w1:p1", 20)).toBe("");
+    expect(client.readVisible("w1:p1")).toBe("");
+  });
+});
+describe("HerdrAdapter.paneReadTail", () => {
+  it("pane の visible frame を text で読み、stdout をそのまま返す", () => {
+    let seen: string[] = [];
+    const client = new HerdrAdapter(
+      fakeExec((bin, args) => {
+        if (bin !== "herdr" || args[1] !== "read") return undefined;
+        seen = args;
+        return execOk("$ \n");
+      }),
+    );
+    expect(client.paneReadTail("w1:p1")).toBe("$ \n");
+    expect(seen).toEqual([
+      "pane",
+      "read",
+      "w1:p1",
+      "--source",
+      "visible",
+      "--format",
+      "text",
+    ]);
+  });
+  it("読めなければ空文字", () => {
+    const client = new HerdrAdapter(fakeExec(() => execNg("pane not found")));
+    expect(client.paneReadTail("w1:p1")).toBe("");
   });
 });
 const RAW_IDLE: unknown = JSON.parse(
@@ -477,5 +550,38 @@ describe("probeServer", () => {
       "down",
     );
     expect(adapter(execNg("Error: Os { code: 2 }")).probeServer()).toBe("down");
+  });
+});
+describe("paneWaitOutput", () => {
+  const WAIT_MS = 60;
+  function adapter(r: CmdResult, sleepMs = 0) {
+    return new HerdrAdapter(
+      fakeExec((_bin, args) => {
+        if (args[0] !== "pane") return undefined;
+        sleepSync(sleepMs);
+        return r;
+      }),
+    );
+  }
+  const wait = (a: HerdrAdapter) =>
+    a.paneWaitOutput("w1:p2", "h2cv-shell-ready-x", WAIT_MS);
+  it("exit 0 は matched", () => {
+    expect(wait(adapter(execOk()))).toBe("matched");
+  });
+  it("予算を使い切ってからの非 0 は timeout", () => {
+    expect(wait(adapter(execNg("timed out"), WAIT_MS))).toBe("timeout");
+  });
+  it("予算を使わずに返る非 0 は unavailable (口の無い版は usage を吐いて即返る)", () => {
+    const usage = {
+      code: 2,
+      stdout: "Manage panes\n\nUsage: herdr pane <COMMAND>",
+      stderr: "",
+    };
+    expect(wait(adapter(usage))).toBe("unavailable");
+  });
+  it("消えた pane / 応答しない server も待てなかった側 (即時の非 0) へ落ちる", () => {
+    expect(wait(adapter(execNg('{"error":{"code":"pane_not_found"}}')))).toBe(
+      "unavailable",
+    );
   });
 });

@@ -14,27 +14,39 @@ export function fakeSendPort(): HerdrSendPort {
     waitIdle: () => true,
     waitIdleOrBlocked: () => true,
     waitWorking: () => true,
-    readRecent: () => "",
     readVisible: () => "",
     agentExplain: () => null,
     paneRun: () => {
       box = "";
     },
     paneSendText: (_pane: string, text: string) => {
-      box = text;
+      box += text;
     },
+    readBox: () => ({ body: box, truncated: false }),
     readBoxBody: () => box,
     agentSendKeys: () => {
       box = "";
     },
   };
 }
+export function fixedBox(
+  read: () => string | null,
+  truncated: () => boolean = () => false,
+): Pick<HerdrSendPort, "readBox" | "readBoxBody"> {
+  return {
+    readBox: () => {
+      const body = read();
+      return body === null ? null : { body, truncated: truncated() };
+    },
+    readBoxBody: read,
+  };
+}
 export function fakeLaunchPort(): HerdrLaunchPort {
   return {
     probeServer: () => "up",
     tabCreate: () => ({ ok: true, tabId: "tab-1", paneId: "w1:p1" }),
-    paneWaitOutput: () => true,
-    paneReadRecent: () => "",
+    paneWaitOutput: () => "matched",
+    paneReadTail: () => "",
     agentStart: () => ({ ok: true }),
   };
 }

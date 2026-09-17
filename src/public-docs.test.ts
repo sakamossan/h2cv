@@ -9,6 +9,7 @@ import {
   ERROR_TOPIC,
   EVIDENCE_ADVICE,
   hintFor,
+  PROVENANCE,
   resolveTopic,
   SEND_VERDICT_ADVICE,
   TESTED_WITH,
@@ -47,6 +48,40 @@ const CATALOG_PROSE = [
   ]),
 ].join("\n");
 const README_PROSE = README.replace(/^```[\s\S]*?^```/gm, "");
+type ExplainTopic = {
+  topic: string;
+  summary: string;
+  body: string[];
+  tables?: Record<string, Record<string, string>[]>;
+};
+const EXPLAIN: ExplainTopic[] = (
+  JSON.parse(run(["explain"]).stdout) as {
+    topics: {
+      topic: string;
+    }[];
+  }
+).topics.map(
+  ({ topic }) => JSON.parse(run(["explain", topic]).stdout) as ExplainTopic,
+);
+const EXPLAIN_PROSE = EXPLAIN.flatMap((t) => [t.summary, ...t.body]).join("\n");
+const EXPLAIN_ALL = [
+  EXPLAIN_PROSE,
+  JSON.stringify(EXPLAIN.map((t) => t.tables ?? {})),
+].join("\n");
+const seeAlsoEntries = (body: string[]): string[] => {
+  const i = body.findIndex((line) => line.startsWith("See also:"));
+  return i < 0
+    ? []
+    : body
+        .slice(i)
+        .join(" ")
+        .replace(/^See also:/, "")
+        .split(" / ")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+};
+const isUsageEntry = (entry: string): boolean =>
+  /^h2cv (?!explain\b)/.test(entry);
 const inlineCode = (md: string): string[] => [
   ...new Set([...md.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]!)),
 ];
@@ -94,51 +129,70 @@ describe("input-ready の段列", () => {
   });
 });
 describe("agent 名の制約", () => {
-  const m = CATALOG_PROSE.match(
-    /at most (\d+) characters of (\[[^\]]+\]) starting with a lowercase letter/,
+  const constraint = (text: string) => ({
+    charClass: text.match(
+      /(\[[^\]\n]+\]) starting with a lowercase letter/,
+    )?.[1],
+    max: text.match(/at most (\d+) characters/)?.[1],
+  });
+  const faces = [
+    ["--help の CATALOG", CATALOG_PROSE],
+    ["explain", EXPLAIN_PROSE],
+  ] as const;
+  it.each(faces)("%s が書く上限が AGENT_NAME_MAX と一致する", (_, text) => {
+    const { max } = constraint(text);
+    expect(max, "名前制約の上限が見つからない").toBeDefined();
+    expect(Number(max)).toBe(AGENT_NAME_MAX);
+  });
+  it.each(faces)(
+    "%s が書く字種が AGENT_NAME_RE と同じ名前を受理する",
+    (_, text) => {
+      const { charClass } = constraint(text);
+      expect(charClass, "名前制約の字種が見つからない").toBeDefined();
+      const declared = new RegExp(`^[a-z]${charClass}*$`);
+      const ascii = Array.from({ length: 95 }, (_, i) =>
+        String.fromCharCode(32 + i),
+      );
+      for (const c of ascii) {
+        expect(declared.test(c), `先頭 ${JSON.stringify(c)}`).toBe(
+          AGENT_NAME_RE.test(c),
+        );
+        expect(declared.test(`a${c}`), `2 文字目 ${JSON.stringify(c)}`).toBe(
+          AGENT_NAME_RE.test(`a${c}`),
+        );
+      }
+    },
   );
-  it("CATALOG が書く上限が AGENT_NAME_MAX と一致する", () => {
-    expect(m, "CATALOG に名前制約が見つからない").not.toBeNull();
-    expect(Number(m![1])).toBe(AGENT_NAME_MAX);
-  });
-  it("CATALOG が書く字種が AGENT_NAME_RE と同じ名前を受理する", () => {
-    expect(m, "CATALOG に名前制約が見つからない").not.toBeNull();
-    const declared = new RegExp(`^[a-z]${m![2]}*$`);
-    const ascii = Array.from({ length: 95 }, (_, i) =>
-      String.fromCharCode(32 + i),
-    );
-    for (const c of ascii) {
-      expect(declared.test(c), `先頭 ${JSON.stringify(c)}`).toBe(
-        AGENT_NAME_RE.test(c),
-      );
-      expect(declared.test(`a${c}`), `2 文字目 ${JSON.stringify(c)}`).toBe(
-        AGENT_NAME_RE.test(`a${c}`),
-      );
-    }
-  });
 });
 describe("正準 pane id の書式", () => {
-  const alphabet = inlineCode(README_PROSE).find((c) =>
-    /^[0-9A-Z]{16,}$/.test(c),
-  );
-  it("README が書く alphabet の全文字を PANE_ID_RE が受理する", () => {
-    expect(alphabet, "README に base32 alphabet が見つからない").toBeDefined();
-    for (const c of alphabet!)
-      expect(PANE_ID_RE.test(`w${c}:p${c}`), `${c} が弾かれる`).toBe(true);
-  });
-  it("上流が採番しない除外文字を README も PANE_ID_RE も持たない", () => {
-    for (const c of "ILOU") {
-      expect(
-        alphabet,
-        `${c} が README の alphabet に混ざっている`,
-      ).not.toContain(c);
-      expect(PANE_ID_RE.test(`w${c}:p${c}`), `${c} が受理される`).toBe(false);
-    }
-  });
-  it.each([
+  const alphabet = (text: string): string | undefined =>
+    text.match(/\b[0-9A-Z]{16,}\b/)?.[0];
+  const faces = [
     ["README", README_PROSE],
     ["--help の CATALOG", CATALOG_PROSE],
-  ])(
+    ["explain", EXPLAIN_PROSE],
+  ] as const;
+  it.each(faces)(
+    "%s が書く alphabet の全文字を PANE_ID_RE が受理する",
+    (_, text) => {
+      const chars = alphabet(text);
+      expect(chars, "base32 alphabet が見つからない").toBeDefined();
+      for (const c of chars!)
+        expect(PANE_ID_RE.test(`w${c}:p${c}`), `${c} が弾かれる`).toBe(true);
+    },
+  );
+  it.each(faces)(
+    "上流が採番しない除外文字を %s も PANE_ID_RE も持たない",
+    (_, text) => {
+      for (const c of "ILOU") {
+        expect(alphabet(text), `${c} が alphabet に混ざっている`).not.toContain(
+          c,
+        );
+        expect(PANE_ID_RE.test(`w${c}:p${c}`), `${c} が受理される`).toBe(false);
+      }
+    },
+  );
+  it.each(faces)(
     "%s の pane id テンプレートが PANE_ID_RE を通る形をしている",
     (_, text) => {
       const shapes = [...text.matchAll(/w<[^<>]+>:p<[^<>]+>/g)].map(
@@ -149,10 +203,11 @@ describe("正準 pane id の書式", () => {
         expect(PANE_ID_RE.test(fillPlaceholders(shape)), shape).toBe(true);
     },
   );
-  it("README が挙げる実例をそのまま PANE_ID_RE が受理する", () => {
-    const examples = inlineCode(README_PROSE).filter((c) =>
-      /^w[0-9A-Z]+:p[0-9A-Z]+$/.test(c),
-    );
+  it.each([
+    ["README", README_PROSE],
+    ["explain", EXPLAIN_PROSE],
+  ])("%s が挙げる実例をそのまま PANE_ID_RE が受理する", (_, text) => {
+    const examples = text.match(/\bw[0-9A-Z]+:p[0-9A-Z]+\b/g) ?? [];
     expect(examples, "pane id の実例が見つからない").not.toHaveLength(0);
     for (const example of examples)
       expect(PANE_ID_RE.test(example), example).toBe(true);
@@ -162,6 +217,7 @@ describe("agentName の生成名", () => {
   it.each([
     ["README", README_PROSE],
     ["--help の CATALOG", CATALOG_PROSE],
+    ["explain", EXPLAIN_PROSE],
   ])("%s の生成名テンプレートが deriveAgentName と一致する", (_, text) => {
     const shapes = [...text.matchAll(/h2cv-w<[^<>]+>-p<[^<>]+>/g)].map(
       (m) => m[0],
@@ -184,6 +240,35 @@ describe("explain のトピック名", () => {
     for (const arg of args)
       expect(resolveTopic(arg), `${arg} が解決しない`).not.toBeNull();
   });
+  it("explain が挙げるトピックへの導線がすべて解決する", () => {
+    const args = [
+      ...[...EXPLAIN_PROSE.matchAll(/h2cv explain ([a-z][a-z0-9-]*)/g)].map(
+        (m) => m[1]!,
+      ),
+      ...EXPLAIN.flatMap((t) => seeAlsoEntries(t.body))
+        .filter((entry) => !isUsageEntry(entry) && !entry.startsWith("h2cv "))
+        .map((entry) => entry.match(/^[a-z][a-z0-9-]*/)?.[0] ?? entry),
+    ];
+    expect(args, "トピックへの導線が見つからない").not.toHaveLength(0);
+    for (const arg of args)
+      expect(resolveTopic(arg), `${arg} が解決しない`).not.toBeNull();
+  });
+  it("explain が挙げる他コマンドの usage が CATALOG に実在する", () => {
+    const usages = EXPLAIN.flatMap((t) => seeAlsoEntries(t.body)).filter(
+      isUsageEntry,
+    );
+    expect(usages, "usage の導線が見つからない").not.toHaveLength(0);
+    for (const usage of usages) {
+      const name = usage.match(/^h2cv ([a-z][a-z0-9-]*)/)![1]!;
+      const command = CATALOG.commands.find((c) => c.name === name);
+      expect(command, `${name} が CATALOG に無い`).toBeDefined();
+      for (const flag of usage.match(/--[a-z][a-z0-9-]*/g) ?? [])
+        expect(
+          command!.flags.map((f) => f.name.split(" ")[0]),
+          `${name} ${flag}`,
+        ).toContain(flag);
+    }
+  });
 });
 describe("kebab-case の語彙", () => {
   it.each([
@@ -196,22 +281,107 @@ describe("kebab-case の語彙", () => {
     expect([...new Set(unknown)]).toEqual([]);
   });
 });
-describe("出力 JSON の写し", () => {
-  const PANE = "w1:p2K";
-  const liveHerdr = (): HerdrPort =>
-    fakeHerdrPort({
-      agentGet: () => ({
-        pane_id: PANE,
-        terminal_id: "term_1",
-        agent: "claude",
-      }),
-    });
-  const unverifiedHerdr = (): HerdrPort => ({
-    ...liveHerdr(),
-    waitWorking: () => false,
+const PANE = "w1:p2K";
+const liveHerdr = (): HerdrPort =>
+  fakeHerdrPort({
+    agentGet: () => ({
+      pane_id: PANE,
+      terminal_id: "term_1",
+      agent: "claude",
+    }),
   });
-  const emitted = (herdr: HerdrPort): Record<string, unknown> =>
-    JSON.parse(run(["send", "--pane", PANE, "hello"], herdr).stdout);
+const unverifiedHerdr = (): HerdrPort => ({
+  ...liveHerdr(),
+  waitWorking: () => false,
+});
+const emitted = (herdr: HerdrPort): Record<string, unknown> =>
+  JSON.parse(run(["send", "--pane", PANE, "hello"], herdr).stdout);
+const emittedKeys = (): Set<string> => {
+  const launchable = (): HerdrPort => ({
+    ...liveHerdr(),
+    tabCreate: () => ({ ok: true as const, tabId: "tab-1", paneId: PANE }),
+  });
+  const samples = [
+    emitted(liveHerdr()),
+    emitted(unverifiedHerdr()),
+    JSON.parse(
+      run(
+        ["launch", "--cwd", "/wt/owner/repo/1", "--prompt", "hi"],
+        launchable(),
+      ).stdout,
+    ),
+    JSON.parse(run(["frobnicate"]).stdout),
+  ];
+  const keys = new Set<string>();
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(walk);
+    else if (value && typeof value === "object")
+      for (const [k, v] of Object.entries(value)) {
+        keys.add(k);
+        walk(v);
+      }
+  };
+  samples.forEach(walk);
+  return keys;
+};
+describe("explain の語彙", () => {
+  it.each([
+    ["エラーコード", Object.keys(ERROR_TOPIC)],
+    ["トピック名", Object.keys(TOPICS)],
+    ["段 id", ALL_STAGES.map((st) => st.id)],
+    ["evidence", Object.keys(EVIDENCE_ADVICE)],
+    ["sendVerdict", Object.keys(SEND_VERDICT_ADVICE)],
+    ["verify", Object.keys(VERIFY_ADVICE)],
+    ["trace の result", Object.keys(TRACE_RESULTS)],
+  ])("実装の %s がすべて explain のどこかに出る", (_, words) => {
+    const missing = [...new Set(words)].filter((w) => !EXPLAIN_ALL.includes(w));
+    expect(missing).toEqual([]);
+  });
+  it("explain の inline code の識別子がすべて実装に実在する", () => {
+    const keys = emittedKeys();
+    const unknown = inlineCode(EXPLAIN_PROSE)
+      .filter((c) => /^[a-z][A-Za-z0-9-]*$/.test(c))
+      .filter(
+        (c) =>
+          !keys.has(c) &&
+          !vocabulary.has(c) &&
+          !NOT_H2CV_VOCABULARY.includes(c),
+      );
+    expect([...new Set(unknown)]).toEqual([]);
+  });
+});
+describe("explain が名指しする実装シンボル", () => {
+  const definesSymbol = (source: string, name: string): boolean =>
+    new RegExp(
+      `^\\s*(?:export\\s+)?(?:default\\s+)?(?:abstract\\s+)?(?:async\\s+)?(?:const|let|var|function\\*?|class|type|interface|enum)\\s+${name}\\b`,
+      "m",
+    ).test(source) ||
+    new RegExp(`^\\s*(?:async\\s+)?${name}\\s*[(<]`, "m").test(source);
+  it("`X in Y.ts` で名指しされたシンボルが Y.ts に定義されている", () => {
+    const refs = [
+      ...EXPLAIN_PROSE.matchAll(
+        /\b([A-Za-z][A-Za-z0-9_]*) in ([a-z][a-z0-9-]*\.ts)\b/g,
+      ),
+    ].map((m) => ({ symbol: m[1]!, file: m[2]! }));
+    expect(refs, "シンボルの名指しが見つからない").not.toHaveLength(0);
+    for (const { symbol, file } of refs) {
+      const source = readFileSync(join(PKG_DIR, "src", file), "utf8");
+      expect(definesSymbol(source, symbol), `${symbol} in ${file}`).toBe(true);
+    }
+  });
+});
+describe("PROVENANCE の網羅", () => {
+  it("実出力の全キーが由来の表に載っている", () => {
+    const covered = new Set(
+      Object.keys(PROVENANCE).flatMap(
+        (key) => key.match(/[A-Za-z][A-Za-z0-9]*/g) ?? [],
+      ),
+    );
+    const missing = [...emittedKeys()].filter((k) => !covered.has(k));
+    expect(missing).toEqual([]);
+  });
+});
+describe("出力 JSON の写し", () => {
   const blocks = [...README.matchAll(/^```json\n([\s\S]*?)^```/gm)].map(
     (m) => JSON.parse(m[1]!) as Record<string, unknown>,
   );
@@ -270,34 +440,6 @@ describe("出力 JSON の写し", () => {
     expect(blocks, "json ブロックが見つからない").not.toHaveLength(0);
     for (const block of blocks) checkVocabulary(block);
   });
-  const emittedKeys = (): Set<string> => {
-    const launchable = (): HerdrPort => ({
-      ...liveHerdr(),
-      tabCreate: () => ({ ok: true as const, tabId: "tab-1", paneId: PANE }),
-    });
-    const samples = [
-      emitted(liveHerdr()),
-      emitted(unverifiedHerdr()),
-      JSON.parse(
-        run(
-          ["launch", "--cwd", "/wt/owner/repo/1", "--prompt", "hi"],
-          launchable(),
-        ).stdout,
-      ),
-      JSON.parse(run(["frobnicate"]).stdout),
-    ];
-    const keys = new Set<string>();
-    const walk = (value: unknown): void => {
-      if (Array.isArray(value)) value.forEach(walk);
-      else if (value && typeof value === "object")
-        for (const [k, v] of Object.entries(value)) {
-          keys.add(k);
-          walk(v);
-        }
-    };
-    samples.forEach(walk);
-    return keys;
-  };
   it("README の散文が名指しする出力キーがすべて実出力に実在する", () => {
     const keys = emittedKeys();
     const unknown = inlineCode(README_PROSE)

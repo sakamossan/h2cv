@@ -30,6 +30,10 @@ Claude Code fills the empty input box with a dim placeholder hint. So whatever r
 
 Start a claude session in a directory it has not seen before and a blocking dialog comes up — MCP approval, workspace trust. Wait for the input box to be drawn and then start typing, and everything you type goes into the dialog.
 
+### And pressing Enter to get past it can end the session
+
+The obvious fix is to press Enter and take the default. That works for the MCP dialogs, whose default is the permissive choice. The workspace trust dialog is the opposite: its default is `No, exit`, so the keystroke meant to clear the dialog answers "no, I do not trust this folder" and claude quits. h2cv recognizes that one screen and refuses to press anything, failing as `untrusted-workspace` in seconds with the session still up — granting trust is yours to do, not a tool's.
+
 <details>
 <summary>The rest of the list</summary>
 
@@ -57,7 +61,7 @@ herdr and Claude Code are each still evolving, and one day these gaps and fricti
 - A running herdr server (`herdr server`), kept resident by whatever means you prefer
   - h2cv only probes for liveness and fails with `server-down` when it is absent; it never starts the server for you. See `h2cv explain launch-sequence` for why the line is drawn there
 
-Tested with claude 2.1.246 / herdr 0.8.2 (agent detection manifest 2026.08.21.1).
+Tested with claude 2.1.274 / herdr 0.9.0 (agent detection manifest 2026.09.11.1).
 
 ## Install
 
