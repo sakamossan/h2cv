@@ -242,7 +242,7 @@ const LAUNCH_PIPELINE_STAGES = LAUNCH_STAGES.filter(
   (s) => !INPUT_READY_STAGE_IDS.includes(s.id as never),
 );
 export const TESTED_WITH = {
-  claude: "2.1.274",
+  claude: "2.1.278",
   herdr: "0.9.0",
   manifest: "2026.09.11.1",
 } as const;

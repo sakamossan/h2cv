@@ -2,37 +2,37 @@
 
 A command-line tool that lets Claude Code start Claude Code sessions and give them instructions.
 
-It drives herdr underneath, and closes, in deterministic code, the problems you are bound to hit when you work the claude input box through it.
+It uses herdr and handles known Claude input-box failure modes with deterministic checks.
 
 <a href="https://imgflip.com/i/ayqhq9"><img src="https://i.imgflip.com/ayqhq9.jpg" alt="Just use if statements." /></a>
 
 ## Why
 
-herdr ships a skill file for AI agents, but a skill file on its own will not let one claude give instructions to another claude. Your agent may well get a message delivered on the fourth attempt — by which point its context is packed with pane ids and screen dumps, and it has lost the thread of whatever it was working on in the first place. The claude input box is a more complicated place than it looks. A short list of what is waiting there:
+herdr ships a skill file for AI agents, but a skill file alone does not reliably let one claude give instructions to another claude. A message may succeed only after several attempts, consuming context with pane ids and screen dumps. The Claude input box has several states that require explicit handling:
 
 ### The completion menu eats your Enter
 
-Claude Code A sends the `/review` skill to Claude Code B with `pane run`. B does not necessarily start working. A wonders why nothing is happening and goes back to look at the pane — again, and again. The Enter never reached the prompt: the completion menu opened on the leading `/` and swallowed it, and the body is still sitting in the input box. Getting out of this takes a procedure rather than a retry, and the obvious move — send the whole thing again — is the wrong one.
+Claude Code A sends the `/review` skill to Claude Code B with `pane run`, but B may not start working. The Enter key may open the completion menu for the leading `/` instead of submitting the prompt, leaving the body in the input box. Recovery requires checking this state; sending the whole message again can create a duplicate.
 
 ### `idle` lies for about a second
 
-Right after startup, herdr reports the agent as `idle`. Trust that, fire `agent send` immediately, and the instruction vanishes without ever running: the TUI is still initializing, and everything typed into that window is discarded. The status is not so much wrong as answering a different question than the one you asked, which is why "check the status, then send" is itself the trap.
+Immediately after startup, herdr reports the agent as `idle` while the TUI is still initializing. An immediate `agent send` is discarded. The `idle` status does not guarantee that the input box is ready, so status and input readiness require separate checks.
 
 ### "It didn't arrive" has three different endings
 
-Nothing arrived, the body arrived without a submit, or the submit landed late. The agent believes it is looking at one condition and re-fires. Read the third as the first and the same instruction runs twice. Whether a retry is safe is not a yes/no question; it is a classification problem.
+Delivery can fail in three ways: no text arrives, the body arrives without a submit, or the submit is delayed. Treating a delayed submit as no delivery can execute the same instruction twice. Retry safety therefore depends on classifying the observed state.
 
 ### An "empty" box is not blank either
 
-Claude Code fills the empty input box with a dim placeholder hint. So whatever reads that box back finds text inside a box that is empty, and what follows is not a double-send — it is silence: the sender is waiting for the box to look empty before it types, and the box never looks empty. (Still with me?)
+Claude Code fills an empty input box with a dim placeholder hint. A reader can misclassify that placeholder as entered text and wait indefinitely for the box to become empty.
 
 ### A first-run dialog takes the prompt instead
 
-Start a claude session in a directory it has not seen before and a blocking dialog comes up — MCP approval, workspace trust. Wait for the input box to be drawn and then start typing, and everything you type goes into the dialog.
+Starting a claude session in a new directory can open a blocking MCP approval or workspace-trust dialog. Text sent after the input box is drawn can go to the dialog instead of the prompt.
 
 ### And pressing Enter to get past it can end the session
 
-The obvious fix is to press Enter and take the default. That works for the MCP dialogs, whose default is the permissive choice. The workspace trust dialog is the opposite: its default is `No, exit`, so the keystroke meant to clear the dialog answers "no, I do not trust this folder" and claude quits. h2cv recognizes that one screen and refuses to press anything, failing as `untrusted-workspace` in seconds with the session still up — granting trust is yours to do, not a tool's.
+Pressing Enter accepts the permissive default in MCP dialogs. In the workspace-trust dialog, however, the default is `No, exit`, which terminates claude. h2cv detects that dialog, does not send a key, and returns `untrusted-workspace` while leaving the session running. Workspace trust requires user approval.
 
 <details>
 <summary>The rest of the list</summary>
@@ -45,13 +45,13 @@ The obvious fix is to press Enter and take the default. That works for the MCP d
 
 </details>
 
-h2cv closes each of these in code — deterministic checks, not inference — and reports what it saw. The full index, with the defense for each one and the topic that documents it, is `h2cv explain failure-modes`.
+h2cv handles each case with deterministic checks and reports the observed state. `h2cv explain failure-modes` lists each failure mode, its mitigation, and the corresponding documentation topic.
 
 ### And the list keeps growing
 
-claude and herdr are both moving targets, and every upstream release is a chance for a new one of these to appear. Not all of them are closed today either: a send retry can still misread an accepted submit as undelivered and stack duplicates.
+claude and herdr change frequently, and upstream releases can introduce new failure modes. Some cases remain unresolved: a send retry can misclassify an accepted submit as undelivered and create duplicates.
 
-herdr and Claude Code are each still evolving, and one day these gaps and frictions should be gone for good. Until that day, a tool built for them is the easier way to live with them.
+h2cv provides a compatibility layer while herdr and Claude Code continue to change.
 
 ## Requirements
 
@@ -61,7 +61,7 @@ herdr and Claude Code are each still evolving, and one day these gaps and fricti
 - A running herdr server (`herdr server`), kept resident by whatever means you prefer
   - h2cv only probes for liveness and fails with `server-down` when it is absent; it never starts the server for you. See `h2cv explain launch-sequence` for why the line is drawn there
 
-Tested with claude 2.1.274 / herdr 0.9.0 (agent detection manifest 2026.09.11.1).
+Tested with claude 2.1.278 / herdr 0.9.0 (agent detection manifest 2026.09.11.1).
 
 ## Install
 
