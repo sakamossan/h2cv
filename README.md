@@ -61,7 +61,7 @@ h2cv provides a compatibility layer while herdr and Claude Code continue to chan
 - A running herdr server (`herdr server`), kept resident by whatever means you prefer
   - h2cv only probes for liveness and fails with `server-down` when it is absent; it never starts the server for you. See `h2cv explain launch-sequence` for why the line is drawn there
 
-Tested with claude 2.1.278 / herdr 0.9.0 (agent detection manifest 2026.09.11.1).
+Tested with claude 2.1.284 / herdr 0.9.0 (agent detection manifest 2026.09.11.1).
 
 ## Install
 
