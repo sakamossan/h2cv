@@ -87,7 +87,7 @@ describe("runLaunch", () => {
       const herdr = fakeHerdrPort({
         agentStart: (name) => {
           started.push(name);
-          return { ok: true };
+          return { ok: true, busyRetries: 0 };
         },
       });
       const r = runLaunch(NO_NAME, deps(herdr));
@@ -113,7 +113,7 @@ describe("runLaunch", () => {
       const herdr = fakeHerdrPort({
         agentStart: (name) => {
           started.push(name);
-          return { ok: true };
+          return { ok: true, busyRetries: 0 };
         },
         agentGet: () => ({
           agent: "claude",
@@ -134,7 +134,7 @@ describe("runLaunch", () => {
     const herdr = fakeHerdrPort({
       agentStart: (_name, _pane, argv) => {
         seen.push(argv);
-        return { ok: true };
+        return { ok: true, busyRetries: 0 };
       },
     });
     runLaunch(
@@ -200,7 +200,7 @@ describe("runLaunch", () => {
       paneReadTail: () => "$ ",
       agentStart: (name) => {
         started.push(name);
-        return { ok: true };
+        return { ok: true, busyRetries: 0 };
       },
     });
     const r = runLaunch(REQ, deps(herdr));
@@ -228,7 +228,7 @@ describe("runLaunch", () => {
       paneReadTail: () => "usage: herdr pane <COMMAND>",
       agentStart: (name) => {
         started.push(name);
-        return { ok: true };
+        return { ok: true, busyRetries: 0 };
       },
     });
     const r = runLaunch(REQ, deps(herdr));
@@ -254,6 +254,8 @@ describe("runLaunch", () => {
       stage: "shell",
       ms: expect.any(Number),
       result: "unavailable",
+      probeCount: 1,
+      elapsedMs: expect.any(Number),
     });
   });
   it("予算を使い切った不達は shell-not-ready のまま撃ち直してから止まる", () => {
@@ -279,12 +281,14 @@ describe("runLaunch", () => {
       stage: "shell",
       ms: expect.any(Number),
       result: "timeout",
+      probeCount: probes,
+      elapsedMs: expect.any(Number),
     });
     expect(r.failure["message"]).toBeUndefined();
   });
   it("agent start が agent_not_ready でも start-failed にせず readiness まで進む", () => {
     const herdr = fakeHerdrPort({
-      agentStart: () => ({ ok: true, notReady: true }),
+      agentStart: () => ({ ok: true, notReady: true, busyRetries: 0 }),
     });
     const r = runLaunch(REQ, deps(herdr));
     expect(r).toMatchObject({ ok: true, value: { ok: true, pane: "w1:p1" } });
@@ -293,6 +297,7 @@ describe("runLaunch", () => {
       stage: "start",
       ms: expect.any(Number),
       result: "fail-open",
+      busyRetries: 0,
     });
   });
   it("通常の起動では start 段が result: ok で載る", () => {
@@ -302,6 +307,48 @@ describe("runLaunch", () => {
       stage: "start",
       ms: expect.any(Number),
       result: "ok",
+      busyRetries: 0,
+    });
+  });
+  it("shell 段の trace は probeCount / elapsedMs を持つ", () => {
+    let waits = 0;
+    const herdr = fakeHerdrPort({
+      paneWaitOutput: () => (++waits >= 2 ? "matched" : "timeout"),
+    });
+    const r = runLaunch(REQ, deps(herdr));
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.value.trace).toContainEqual({
+      stage: "shell",
+      ms: expect.any(Number),
+      result: "ok",
+      probeCount: 2,
+      elapsedMs: expect.any(Number),
+    });
+  });
+  it("start 段の trace は agentStart の busyRetries を持つ", () => {
+    const herdr = fakeHerdrPort({
+      agentStart: () => ({ ok: true, busyRetries: 3 }),
+    });
+    const r = runLaunch(REQ, deps(herdr));
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.value.trace).toContainEqual({
+      stage: "start",
+      ms: expect.any(Number),
+      result: "ok",
+      busyRetries: 3,
+    });
+  });
+  it("start 段の失敗行も busyRetries を持つ", () => {
+    const herdr = fakeHerdrPort({
+      agentStart: () => ({ ok: false, stderr: "boom", busyRetries: 5 }),
+    });
+    const r = runLaunch(REQ, deps(herdr));
+    if (r.ok) throw new Error("expected not ok");
+    expect(r.failure["trace"]).toContainEqual({
+      stage: "start",
+      ms: expect.any(Number),
+      result: "timeout",
+      busyRetries: 5,
     });
   });
   it("1 回飲まれてもプローブを打ち直して起動まで進む", () => {
@@ -317,7 +364,7 @@ describe("runLaunch", () => {
   });
   it("起動の失敗は start-failed", () => {
     const herdr = fakeHerdrPort({
-      agentStart: () => ({ ok: false, stderr: "boom" }),
+      agentStart: () => ({ ok: false, stderr: "boom", busyRetries: 1 }),
     });
     expect(runLaunch(REQ, deps(herdr))).toMatchObject({
       ok: false,
@@ -426,7 +473,11 @@ describe("runLaunch", () => {
     it("server が居なければ pane 経路でも即座に server-down", () => {
       const herdr = fakeHerdrPort({
         probeServer: () => "down",
-        agentStart: () => ({ ok: false, stderr: "呼ばれてはいけない" }),
+        agentStart: () => ({
+          ok: false,
+          stderr: "呼ばれてはいけない",
+          busyRetries: 0,
+        }),
       });
       expect(runLaunch(PANE_REQ, deps(herdr))).toMatchObject({
         ok: false,
@@ -438,7 +489,7 @@ describe("runLaunch", () => {
       const herdr = fakeHerdrPort({
         agentStart: (_name, pane) => {
           seen.push(pane);
-          return { ok: true };
+          return { ok: true, busyRetries: 0 };
         },
         agentGet: () => ({
           agent: "claude",
@@ -460,7 +511,7 @@ describe("runLaunch", () => {
         paneReadTail: () => "$ ",
         agentStart: (name) => {
           started.push(name);
-          return { ok: true };
+          return { ok: true, busyRetries: 0 };
         },
       });
       expect(runLaunch(PANE_REQ, deps(herdr))).toMatchObject({

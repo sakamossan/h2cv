@@ -47,7 +47,7 @@ export function fakeLaunchPort(): HerdrLaunchPort {
     tabCreate: () => ({ ok: true, tabId: "tab-1", paneId: "w1:p1" }),
     paneWaitOutput: () => "matched",
     paneReadTail: () => "",
-    agentStart: () => ({ ok: true }),
+    agentStart: () => ({ ok: true, busyRetries: 0 }),
   };
 }
 export function fakeHerdrPort(over: Partial<HerdrPort> = {}): HerdrPort {

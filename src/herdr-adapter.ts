@@ -38,7 +38,7 @@ const isTopRule = (line: string) =>
 const PROMPT_MARKER = "❯";
 function applySgr(dim: boolean, params: string[]): boolean {
   let next = dim;
-  for (let i = 0; i < params.length; ) {
+  for (let i = 0; i < params.length;) {
     const p = params[i];
     if (p === "38" || p === "48" || p === "58") {
       const mode = params[i + 1];
@@ -282,6 +282,17 @@ export type TabCreateResult =
       ok: false;
       stderr: string;
     };
+export type AgentStartResult =
+  | {
+      ok: true;
+      notReady?: true;
+      busyRetries: number;
+    }
+  | {
+      ok: false;
+      stderr: string;
+      busyRetries: number;
+    };
 export class HerdrAdapter {
   constructor(protected readonly exec: Exec = cmd) {}
   agentGet(target: string): AgentGetResponse | null {
@@ -451,15 +462,7 @@ export class HerdrAdapter {
     name: string,
     paneId: string,
     claudeArgs: string[],
-  ):
-    | {
-        ok: true;
-        notReady?: true;
-      }
-    | {
-        ok: false;
-        stderr: string;
-      } {
+  ): AgentStartResult {
     const argv = [
       "agent",
       "start",
@@ -475,12 +478,12 @@ export class HerdrAdapter {
     ];
     for (let i = 0; ; i++) {
       const r = this.exec("herdr", argv);
-      if (r.code === 0) return { ok: true };
+      if (r.code === 0) return { ok: true, busyRetries: i };
       if (herdrErrorCode(r) === AGENT_NOT_READY)
-        return { ok: true, notReady: true };
+        return { ok: true, notReady: true, busyRetries: i };
       const stderr = r.stderr.trim();
       if (!stderr.includes(AGENT_PANE_BUSY) || i >= AGENT_START_RETRIES) {
-        return { ok: false, stderr };
+        return { ok: false, stderr, busyRetries: i };
       }
       sleepSync(AGENT_START_RETRY_MS);
     }

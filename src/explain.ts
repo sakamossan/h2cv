@@ -192,15 +192,22 @@ export const PROVENANCE = {
     upstream: "—",
     handoff: "no",
   },
-  "attempts / probeCount / trace (attempt / stage / ms / result)": {
-    origin: "h2cv",
-    upstream: "—",
-    handoff: "no",
-  },
+  "attempts / probeCount / trace (attempt / stage / ms / result / probeCount / elapsedMs / busyRetries)":
+    {
+      origin: "h2cv",
+      upstream: "—",
+      handoff: "no",
+    },
   "readyMs / elapsedMs / timeoutMs": {
     origin: "h2cv",
     upstream: "—",
     handoff: "no",
+  },
+  version: {
+    origin: "h2cv",
+    upstream: "—",
+    handoff:
+      "no — h2cv's own package version, on both the launch success and failure JSON",
   },
 } as const satisfies Record<
   string,
@@ -242,7 +249,7 @@ const LAUNCH_PIPELINE_STAGES = LAUNCH_STAGES.filter(
   (s) => !INPUT_READY_STAGE_IDS.includes(s.id as never),
 );
 export const TESTED_WITH = {
-  claude: "2.1.284",
+  claude: "2.1.289",
   herdr: "0.9.0",
   manifest: "2026.09.11.1",
 } as const;
@@ -415,6 +422,10 @@ export const TOPICS: Record<
       "into, with launch rows carrying no attempt number. That is where a fail-open shows up: the",
       "agent_not_ready pass-through is a start row with result fail-open, and the RC budget",
       "running out is an rc row with result fail-open. Neither is a top-level boolean any more.",
+      "The shell row also carries probeCount and elapsedMs (how many probes the handshake took),",
+      "and the start row carries busyRetries (how many times agent start was re-run on",
+      "agent_pane_busy), on success and failure alike, so a slow ms can be read as retries after",
+      "the fact. The launch JSON also carries h2cv's own version at the top level.",
       "",
       "A start is always fresh. There is no face for observing whether an existing session is",
       "live, and no decision about closing it or firing at it again; all this does is start one.",

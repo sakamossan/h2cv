@@ -71,8 +71,12 @@ export function runLaunch(req: LaunchRequest, deps: LaunchDeps): LaunchResult {
     ...(deps.timings === undefined ? {} : { timings: deps.timings }),
   });
   const trace: TraceEntry[] = [];
-  const mark = (stage: StageId, startedAt: number, result: TraceResult) =>
-    trace.push({ stage, ms: Date.now() - startedAt, result });
+  const mark = (
+    stage: StageId,
+    startedAt: number,
+    result: TraceResult,
+    extra?: Pick<TraceEntry, "probeCount" | "elapsedMs" | "busyRetries">,
+  ) => trace.push({ stage, ms: Date.now() - startedAt, result, ...extra });
   const probeStartedAt = Date.now();
   const probe = deps.herdr.probeServer();
   if (probe !== "up") {
@@ -109,7 +113,10 @@ export function runLaunch(req: LaunchRequest, deps: LaunchDeps): LaunchResult {
   if (!shell.ok) {
     const unavailable = shell.reason === "probe-unavailable";
     const counts = `probeCount=${shell.probeCount}, elapsedMs=${shell.elapsedMs}`;
-    mark("shell", shellStartedAt, unavailable ? "unavailable" : "timeout");
+    mark("shell", shellStartedAt, unavailable ? "unavailable" : "timeout", {
+      probeCount: shell.probeCount,
+      elapsedMs: shell.elapsedMs,
+    });
     return fail("start-failed", "shell", {
       agentName,
       stderr: unavailable
@@ -121,18 +128,25 @@ export function runLaunch(req: LaunchRequest, deps: LaunchDeps): LaunchResult {
       trace,
     });
   }
-  mark("shell", shellStartedAt, "ok");
+  mark("shell", shellStartedAt, "ok", {
+    probeCount: shell.probeCount,
+    elapsedMs: shell.elapsedMs,
+  });
   const startStartedAt = Date.now();
   const start = launcher.start(agentName, paneId, [...(req.claudeArgv ?? [])]);
   if (!start.ok) {
-    mark("start", startStartedAt, "timeout");
+    mark("start", startStartedAt, "timeout", {
+      busyRetries: start.busyRetries,
+    });
     return fail("start-failed", "start", {
       agentName,
       stderr: start.stderr,
       trace,
     });
   }
-  mark("start", startStartedAt, start.notReady === true ? "fail-open" : "ok");
+  mark("start", startStartedAt, start.notReady === true ? "fail-open" : "ok", {
+    busyRetries: start.busyRetries,
+  });
   const readiness = launcher.waitReadiness(paneId);
   trace.push(...readiness.trace);
   if (!readiness.ok) {

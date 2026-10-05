@@ -8,10 +8,7 @@ import { DEFAULT_SESSION_TIMINGS } from "./timings.js";
 
 export type StageKind = "act+verify" | "gate" | "act";
 export type Observes =
-  | "herdr-cli"
-  | "herdr-agent-status"
-  | "claude-screen"
-  | "none";
+  "herdr-cli" | "herdr-agent-status" | "claude-screen" | "none";
 export type TraceResult =
   | "ok"
   | "timeout"
@@ -43,6 +40,9 @@ export type TraceEntry = {
   stage: StageId;
   ms: number;
   result: TraceResult;
+  probeCount?: number;
+  elapsedMs?: number;
+  busyRetries?: number;
 };
 export const SEND_VERIFY_TIMEOUT_MS = 6000;
 export const SEND_GRACE_MS = 10000;
@@ -405,16 +405,7 @@ export const PROBLEMS = {
   },
 } as const satisfies Record<ProblemId, Problem>;
 export type RetiredId =
-  | "R1"
-  | "R2"
-  | "R3"
-  | "R4"
-  | "R5"
-  | "R6"
-  | "R7"
-  | "R8"
-  | "R9"
-  | "R10";
+  "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "R7" | "R8" | "R9" | "R10";
 export const RETIRED = {
   R1: {
     defence:
@@ -532,7 +523,7 @@ export const LAUNCH_STAGES = [
     interval: budget("shellProbeWaitMs"),
     timeout: budget("shellReadyTimeoutMs"),
     onLimit:
-      "fail-closed: start-failed (stderr starts with shell-not-ready, or with shell-probe-unavailable when the wait could not be entered, which also leaves an unavailable row in the trace; probeCount / paneTail are attached)",
+      "fail-closed: start-failed (stderr starts with shell-not-ready, or with shell-probe-unavailable when the wait could not be entered, which also leaves an unavailable row in the trace; probeCount / paneTail are attached). The shell row in the trace carries probeCount / elapsedMs on success and failure alike",
     advice:
       "The start was never typed. shell-not-ready means the pane never reached its prompt, so read paneTail and suspect the rc; shell-probe-unavailable means the wait itself did not run (a herdr too old for pane wait-output, a pane that is gone, a server that stopped answering), so read message and fix that first. Either way the tab is the caller's to reclaim",
     defends: ["P13", "P32"],
@@ -547,7 +538,7 @@ export const LAUNCH_STAGES = [
     interval: budget("AGENT_START_RETRY_MS"),
     timeout: NONE,
     onLimit:
-      "fail-closed: start-failed. agent_not_ready is fail-open: a start / fail-open row in the trace",
+      "fail-closed: start-failed. agent_not_ready is fail-open: a start / fail-open row in the trace. The start row carries busyRetries (re-runs on agent_pane_busy) on success and failure alike",
     advice:
       "Read the upstream message in stderr. An invalid argv or an invalid agent name lands here, and neither is fixed by firing again unchanged",
     defends: ["P15", "P16", "P17"],

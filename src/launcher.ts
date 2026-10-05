@@ -1,4 +1,5 @@
 import type {
+  AgentStartResult,
   HerdrLaunchPort,
   HerdrSendPort,
   ScreenDetection,
@@ -96,19 +97,7 @@ export class AgentLauncher {
       if (Date.now() >= deadline) return fail("timeout", probes);
     }
   }
-  start(
-    name: string,
-    paneId: string,
-    claudeArgs: string[],
-  ):
-    | {
-        ok: true;
-        notReady?: true;
-      }
-    | {
-        ok: false;
-        stderr: string;
-      } {
+  start(name: string, paneId: string, claudeArgs: string[]): AgentStartResult {
     return this.herdr.agentStart(name, paneId, claudeArgs);
   }
   waitReadiness(paneId: string): LaunchReadinessResult {

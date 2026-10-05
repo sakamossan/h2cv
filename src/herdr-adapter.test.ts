@@ -394,6 +394,7 @@ describe("HerdrAdapter の argv 契約 (#1989)", () => {
     const { client, seen } = recorder();
     expect(client.agentStart("agent-3", "w1:p1", ["--foo", "bar"])).toEqual({
       ok: true,
+      busyRetries: 0,
     });
     expect(seen[0]).toEqual([
       "agent",
@@ -440,6 +441,7 @@ describe("HerdrAdapter の argv 契約 (#1989)", () => {
     expect(client.agentStart("agent-3", "w1:p1", [])).toEqual({
       ok: true,
       notReady: true,
+      busyRetries: 0,
     });
     expect(calls).toBe(1);
   });
@@ -454,7 +456,10 @@ describe("HerdrAdapter の argv 契約 (#1989)", () => {
           : execOk(),
       ),
     );
-    expect(client.agentStart("agent-3", "w1:p1", [])).toEqual({ ok: true });
+    expect(client.agentStart("agent-3", "w1:p1", [])).toEqual({
+      ok: true,
+      busyRetries: 2,
+    });
     expect(calls).toBe(3);
   });
   it("agentStart は agent_pane_busy 以外の失敗を即返す (直らない失敗で粘らない)", () => {

@@ -75,7 +75,7 @@ describe("h2cv launch (#2063)", () => {
       ...launchableHerdr(),
       agentStart: (_n: string, _p: string, argv: string[]) => {
         seen.push(argv);
-        return { ok: true as const };
+        return { ok: true as const, busyRetries: 0 };
       },
     };
     run([...LAUNCH_ARGV, "--", "--model", "fable"], herdr);
@@ -173,7 +173,7 @@ describe("h2cv launch (#2063)", () => {
         tabId: "tab-1",
         paneId: PANE,
       })),
-      agentStart: vi.fn(() => ({ ok: true as const })),
+      agentStart: vi.fn(() => ({ ok: true as const, busyRetries: 0 })),
     };
     const r = run(
       ["launch", "--pane", PANE, "--agent-name", "repo-2334"],

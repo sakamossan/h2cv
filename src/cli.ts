@@ -15,6 +15,7 @@ import {
   UNTRUSTED_WORKSPACE_MESSAGE,
 } from "./sender.js";
 import { DEFAULT_SESSION_TIMINGS } from "./timings.js";
+import { H2CV_VERSION } from "./version.js";
 
 const WAIT_INPUT_READY_DEFAULT_TIMEOUT_MS =
   DEFAULT_SESSION_TIMINGS.inputReadyTimeoutMs;
@@ -205,9 +206,13 @@ function summarizeLaunch(failure: {
   return [`launch: ${failure.error} —`, ...parts].join(" ");
 }
 function renderLaunch(outcome: LaunchResult): RunResult {
-  if (outcome.ok) return jsonOut(0, outcome.value);
+  if (outcome.ok)
+    return jsonOut(0, { ...outcome.value, version: H2CV_VERSION });
   const { error, ...rest } = outcome.failure;
-  return fail({ ok: false, error, ...rest }, summarizeLaunch(outcome.failure));
+  return fail(
+    { ok: false, error, ...rest, version: H2CV_VERSION },
+    summarizeLaunch(outcome.failure),
+  );
 }
 export function run(
   argv: string[],
