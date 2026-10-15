@@ -143,7 +143,9 @@ export function isTurnlessCommand(text: string): boolean {
 }
 export type SendVerify = "herdr-agent-working" | "claude-box-cleared";
 export type SendEvidence =
-  "herdr-agent-working" | "claude-box-cleared" | "herdr-agent-gone";
+  | "herdr-agent-working"
+  | "claude-box-cleared"
+  | "herdr-agent-gone";
 export type SendVerdict =
   | "not-delivered"
   | "landed-not-submitted"

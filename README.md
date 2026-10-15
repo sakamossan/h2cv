@@ -1,57 +1,51 @@
 # h2cv (herdr sends to claude verifiably)
 
-A command-line tool that lets Claude Code start Claude Code sessions and give them instructions.
+Hand Claude Code a job that is bigger than one session — or one you want done while you are away — and let it start the extra Claude Code sessions it needs, with each instruction verified as delivered.
 
-It uses herdr and handles known Claude input-box failure modes with deterministic checks.
+<a href="https://github.com/sakamossan/h2cv-demo"><img src="https://github.com/sakamossan/h2cv-demo/releases/download/demo-assets/demo.gif" alt="A Claude Code session starting three Claude Code sessions with h2cv" /></a>
+
+## What it's for
+
+- **Run work while you are away.** A timer starts a claude session at 09:00 with a skill to run, and the result is waiting in its pane when you sit down.
+- **Split a job across sessions.** One session plans and starts reviewers or implementers in parallel panes, instead of doing everything in one context.
+- **Assign roles.** A long-lived session hands follow-up work to a fresh session with a clean context, instead of carrying everything forever.
+
+All of these need one claude session (or a script) to start another claude session and type into it. h2cv is the one command that does that and tells you, in JSON, whether it worked.
+
+It runs on top of [herdr](https://herdr.dev), a terminal workspace manager for AI coding agents: herdr owns the tabs and panes the sessions live in, and `herdr server` is its headless server.
+
+## Try it in 60 seconds
+
+You need `herdr` and `claude` on `PATH`, a running `herdr server`, and a directory you have opened claude in before (a new directory shows the workspace-trust dialog, and h2cv stops with `untrusted-workspace` rather than answer it for you).
+
+```bash
+npm install -g h2cv
+h2cv launch --cwd ~/your-project --prompt 'Say hello in one sentence, then stop.'
+```
+
+A new tab named after the directory appears in herdr, claude starts in it, and the prompt is typed and submitted. A few seconds later the command prints one JSON document with `ok: true`, the `pane` the session lives in, and the generated `agentName`. Switch to that tab and claude has already answered. Close the tab when you are done; h2cv leaves it open on purpose.
+
+The more common way to use it is to hand it to an agent and let it read its own manual. `h2cv --help` is a machine-readable command catalog and `h2cv explain` is the mechanics; both are written to be consumed by an LLM and relayed to you.
+
+```bash
+claude -p '
+  Using the `npx h2cv` command,
+  start another Claude Code session with --remote-control.
+  Read `npx h2cv --help` first.'
+```
+
+## Why this needs a tool
+
+herdr ships a skill file for AI agents, and asking claude to "type this into the other pane" looks like it should be enough. In practice the instruction arrives on the fourth attempt, or twice, and the agent spends your tokens and your waiting time on pane ids and screen dumps instead of the work. You end up checking on it because nothing seems to be happening. Two examples of what goes wrong in the Claude input box:
+
+- **The completion menu eats your Enter.** A prompt that starts with `/review` opens the completion menu, and the Enter that should submit it only closes the menu. The body sits in the box, and sending the whole message again creates a duplicate.
+- **An "empty" box is not blank.** Claude Code fills an empty input box with a dim placeholder hint, so a reader that waits for the box to clear can misread the hint as typed text and wait forever.
+
+No single retry or sleep fixes these; each one needs its own check of the screen.
 
 <a href="https://imgflip.com/i/ayqhq9"><img src="https://i.imgflip.com/ayqhq9.jpg" alt="Just use if statements." /></a>
 
-## Why
-
-herdr ships a skill file for AI agents, but a skill file alone does not reliably let one claude give instructions to another claude. A message may succeed only after several attempts, consuming context with pane ids and screen dumps. The Claude input box has several states that require explicit handling:
-
-### The completion menu eats your Enter
-
-Claude Code A sends the `/review` skill to Claude Code B with `pane run`, but B may not start working. The Enter key may open the completion menu for the leading `/` instead of submitting the prompt, leaving the body in the input box. Recovery requires checking this state; sending the whole message again can create a duplicate.
-
-### `idle` lies for about a second
-
-Immediately after startup, herdr reports the agent as `idle` while the TUI is still initializing. An immediate `agent send` is discarded. The `idle` status does not guarantee that the input box is ready, so status and input readiness require separate checks.
-
-### "It didn't arrive" has three different endings
-
-Delivery can fail in three ways: no text arrives, the body arrives without a submit, or the submit is delayed. Treating a delayed submit as no delivery can execute the same instruction twice. Retry safety therefore depends on classifying the observed state.
-
-### An "empty" box is not blank either
-
-Claude Code fills an empty input box with a dim placeholder hint. A reader can misclassify that placeholder as entered text and wait indefinitely for the box to become empty.
-
-### A first-run dialog takes the prompt instead
-
-Starting a claude session in a new directory can open a blocking MCP approval or workspace-trust dialog. Text sent after the input box is drawn can go to the dialog instead of the prompt.
-
-### And pressing Enter to get past it can end the session
-
-Pressing Enter accepts the permissive default in MCP dialogs. In the workspace-trust dialog, however, the default is `No, exit`, which terminates claude. h2cv detects that dialog, does not send a key, and returns `untrusted-workspace` while leaving the session running. Workspace trust requires user approval.
-
-<details>
-<summary>The rest of the list</summary>
-
-- You send a message to a pane, the box has not repainted yet, and the agent — seeing nothing there — sends it a second time
-- Scrollback still holds frames that scrolled away seconds ago, so reading "recent output" verifies the past: the dialog, the prompt line, or the status label you are looking for may already be gone
-- Emptying the input box means sending Ctrl+C. Send it exactly once and the box clears as intended; send it twice and the session is over — which is why h2cv never sends it, and reports a box it cannot use instead
-- While claude is connecting to Remote Control the agent looks like it is waiting for messages, but everything actually sent during that window is thrown away
-- Terminals wrap multibyte characters in cells, so a read-back cannot simply be compared against the string that was sent
-
-</details>
-
-h2cv handles each case with deterministic checks and reports the observed state. `h2cv explain failure-modes` lists each failure mode, its mitigation, and the corresponding documentation topic.
-
-### And the list keeps growing
-
-claude and herdr change frequently, and upstream releases can introduce new failure modes. Some cases remain unresolved: a send retry can misclassify an accepted submit as undelivered and create duplicates.
-
-h2cv provides a compatibility layer while herdr and Claude Code continue to change.
+h2cv runs those checks deterministically and reports the state it observed. `h2cv explain failure-modes` lists every failure mode it defends against, its mitigation, and the documentation topic for it. claude and herdr change often, and h2cv is the compatibility layer that absorbs those changes.
 
 ## Requirements
 
@@ -61,7 +55,7 @@ h2cv provides a compatibility layer while herdr and Claude Code continue to chan
 - A running herdr server (`herdr server`), kept resident by whatever means you prefer
   - h2cv only probes for liveness and fails with `server-down` when it is absent; it never starts the server for you. See `h2cv explain launch-sequence` for why the line is drawn there
 
-Tested with claude 2.1.289 / herdr 0.9.0 (agent detection manifest 2026.09.11.1).
+Tested with claude 2.1.300 / herdr 0.9.3 (agent detection manifest 2026.10.11.1).
 
 ## Install
 
@@ -69,16 +63,7 @@ Tested with claude 2.1.289 / herdr 0.9.0 (agent detection manifest 2026.09.11.1)
 npm install -g h2cv
 ```
 
-## Quick start
-
-Hand it to an agent and let it read its own manual. `h2cv --help` is a machine-readable command catalog and `h2cv explain` is the mechanics; both are written to be consumed by an LLM and relayed to you.
-
-```bash
-claude -p '
-  Using the `npx h2cv` command,
-  start another Claude Code session with --remote-control.
-  Read `npx h2cv --help` first.'
-```
+## Commands
 
 ### `launch` — start a session and deliver the first prompt
 
@@ -110,11 +95,10 @@ h2cv send --pane "$HERDR_PANE_ID" 'run the tests and report failures'
 h2cv send --agent-name my-agent 'run the tests and report failures'
 ```
 
-The destination is exactly one of `--pane <paneId>` or `--agent-name <name>`, and `wait-input-ready`
-takes the same pair. `--pane` is the handle to carry around: a canonical pane id (`w<N>:p<M>`, where
-each number is base32 over `123456789ABCDEFGHJKMNPQRSTVWXYZ0`, so anything past the ninth pane reads
-like `w1:p2K`) whose value stays valid across waits and retries, and inside a session
-`$HERDR_PANE_ID` already holds it.
+The destination is exactly one of `--pane <paneId>` or `--agent-name <name>`. `--pane` is the handle
+to carry around: a canonical pane id (`w<N>:p<M>`, where each number is base32 over
+`123456789ABCDEFGHJKMNPQRSTVWXYZ0`, so anything past the ninth pane reads like `w1:p2K`) whose value
+stays valid across waits and retries, and inside a session `$HERDR_PANE_ID` already holds it.
 `--agent-name` is folded into a pane id by a single `agent get` before anything is typed — the name
 itself is not a handle, because its binding is released the moment claude exits, so a name that
 resolves to nothing fails as `agent-vanished` rather than typing anywhere.
@@ -153,20 +137,18 @@ Every failure object carries a `hint` pointing at the topic that explains it. An
 }
 ```
 
-## Examples
+### `explain` — how each layer behaves
 
-### Have a running session start another one and run a skill
-
-The prompt above starts a session and stops there. An agent that has read `h2cv --help` can go one
-step further in the same prompt: open a pane, start a session in it, and hand that session a skill
-to run.
+`h2cv explain` tells your AI agent how each layer actually behaves — the startup pipeline, the input-ready stages, the send protocol, the output contract, and the failure modes it exists to defend against. Each topic carries the stage table it covers, generated from the same registry the implementation reports `stage` and `trace` from.
 
 ```bash
-claude -p '
-  Using the `npx h2cv` command,
-  launch another Claude Code session in a new pane
-  and have it run the `/review` skill.'
+h2cv explain                 # topic list
+h2cv explain failure-modes   # what goes wrong, and where each defense lives
+h2cv explain send-protocol   # a topic
+h2cv explain send-unverified # or an error code you just received
 ```
+
+## Examples
 
 ### Start a skill session on a schedule
 
@@ -209,17 +191,24 @@ skill run behind it — when you get to the machine. The unit's own exit status 
 verdict: the launch JSON goes to the journal, and a startup that could not be verified fails the
 unit rather than leaving a silent pane.
 
-## Documentation
+### Have a running session start another one and run a skill
 
-`h2cv explain` tells your AI agent how each layer actually behaves — the startup pipeline, the input-ready stages, the send protocol, the output contract, and the failure modes it exists to defend against. Each topic carries the stage table it covers, generated from the same registry the implementation reports `stage` and `trace` from.
+An agent that has read `h2cv --help` can open a pane, start a session in it, and hand that session a
+skill to run, all from one prompt.
 
 ```bash
-h2cv explain                 # topic list
-h2cv explain failure-modes   # what goes wrong, and where each defense lives
-h2cv explain send-protocol   # a topic
-h2cv explain send-unverified # or an error code you just received
-h2cv --help                  # machine-readable command catalog
+claude -p '
+  Using the `npx h2cv` command,
+  launch another Claude Code session in a new pane
+  and have it run the `/review` skill.'
 ```
+
+## Documentation
+
+`h2cv --help` is the machine-readable catalog of every command, including the two this page does not
+cover: `wait-input-ready` (wait until a pane can take input, without sending anything; it takes the
+same `--pane` / `--agent-name` pair as `send`) and `self-send` (a send whose target is the caller's
+own pane). `h2cv explain` without arguments lists the topics.
 
 ## Development
 
