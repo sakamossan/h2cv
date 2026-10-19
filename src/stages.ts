@@ -8,10 +8,7 @@ import { DEFAULT_SESSION_TIMINGS } from "./timings.js";
 
 export type StageKind = "act+verify" | "gate" | "act";
 export type Observes =
-  | "herdr-cli"
-  | "herdr-agent-status"
-  | "claude-screen"
-  | "none";
+  "herdr-cli" | "herdr-agent-status" | "claude-screen" | "none";
 export type TraceResult =
   | "ok"
   | "timeout"
@@ -408,16 +405,7 @@ export const PROBLEMS = {
   },
 } as const satisfies Record<ProblemId, Problem>;
 export type RetiredId =
-  | "R1"
-  | "R2"
-  | "R3"
-  | "R4"
-  | "R5"
-  | "R6"
-  | "R7"
-  | "R8"
-  | "R9"
-  | "R10";
+  "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "R7" | "R8" | "R9" | "R10";
 export const RETIRED = {
   R1: {
     defence:

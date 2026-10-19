@@ -38,7 +38,7 @@ const isTopRule = (line: string) =>
 const PROMPT_MARKER = "❯";
 function applySgr(dim: boolean, params: string[]): boolean {
   let next = dim;
-  for (let i = 0; i < params.length; ) {
+  for (let i = 0; i < params.length;) {
     const p = params[i];
     if (p === "38" || p === "48" || p === "58") {
       const mode = params[i + 1];

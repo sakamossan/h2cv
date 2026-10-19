@@ -55,7 +55,7 @@ h2cv runs those checks deterministically and reports the state it observed. `h2c
 - A running herdr server (`herdr server`), kept resident by whatever means you prefer
   - h2cv only probes for liveness and fails with `server-down` when it is absent; it never starts the server for you. See `h2cv explain launch-sequence` for why the line is drawn there
 
-Tested with claude 2.1.300 / herdr 0.9.3 (agent detection manifest 2026.10.11.1).
+Tested with claude 2.1.303 / herdr 0.9.3 (agent detection manifest 2026.10.11.1).
 
 ## Install
 
@@ -78,13 +78,9 @@ h2cv launch \
     -n my-agent
 ```
 
-Everything after `--` is passed straight through to `claude`, and nothing is added to it. The
-session name `claude` sees (`-n`) and remote control are yours to pass; `--agent-name` only names
-the herdr agent and the tab. Omit `--prompt` to start the session.
+Everything after `--` is passed straight through to `claude`, and nothing is added to it. The session name `claude` sees (`-n`) and remote control are yours to pass; `--agent-name` only names the herdr agent and the tab. Omit `--prompt` to start the session.
 
-`--agent-name` is optional. herdr needs a name to start an agent at all, so omitting it derives one
-from the pane (`h2cv-w<N>-p<M>`) and labels the tab with the basename of `--cwd`; the name that was
-used comes back as `agentName` in the success JSON either way.
+`--agent-name` is optional. herdr needs a name to start an agent at all, so omitting it derives one from the pane (`h2cv-w<N>-p<M>`) and labels the tab with the basename of `--cwd`; the name that was used comes back as `agentName` in the success JSON either way.
 
 Pass `--pane <paneId>` in place of `--cwd` to start the session in a pane you created yourself. The startup sequence is otherwise identical — the pane is still probed for shell readiness before anything is typed into it — but the tab is yours to create and to close.
 
@@ -95,13 +91,7 @@ h2cv send --pane "$HERDR_PANE_ID" 'run the tests and report failures'
 h2cv send --agent-name my-agent 'run the tests and report failures'
 ```
 
-The destination is exactly one of `--pane <paneId>` or `--agent-name <name>`. `--pane` is the handle
-to carry around: a canonical pane id (`w<N>:p<M>`, where each number is base32 over
-`123456789ABCDEFGHJKMNPQRSTVWXYZ0`, so anything past the ninth pane reads like `w1:p2K`) whose value
-stays valid across waits and retries, and inside a session `$HERDR_PANE_ID` already holds it.
-`--agent-name` is folded into a pane id by a single `agent get` before anything is typed — the name
-itself is not a handle, because its binding is released the moment claude exits, so a name that
-resolves to nothing fails as `agent-vanished` rather than typing anywhere.
+The destination is exactly one of `--pane <paneId>` or `--agent-name <name>`. `--pane` is the handle to carry around: a canonical pane id (`w<N>:p<M>`, where each number is base32 over `123456789ABCDEFGHJKMNPQRSTVWXYZ0`, so anything past the ninth pane reads like `w1:p2K`) whose value stays valid across waits and retries, and inside a session `$HERDR_PANE_ID` already holds it. `--agent-name` is folded into a pane id by a single `agent get` before anything is typed — the name itself is not a handle, because its binding is released the moment claude exits, so a name that resolves to nothing fails as `agent-vanished` rather than typing anywhere.
 
 Slash commands go through the same command. Anything that starts a turn is verified by waiting for the session to start working; commands that never start one (`/clear`, `/rename`, `/exit`, `/quit`) are verified by watching the input box clear instead. The caller does not have to know which is which — `send` picks the check from the text, and says which one it used.
 
@@ -152,9 +142,7 @@ h2cv explain send-unverified # or an error code you just received
 
 ### Start a skill session on a schedule
 
-`launch` is one command that starts a session, delivers the first prompt, and exits — so anything
-that can run a command can start a skill session, with no agent in the loop. A systemd user service
-and the timer that fires it:
+`launch` is one command that starts a session, delivers the first prompt, and exits — so anything that can run a command can start a skill session, with no agent in the loop. A systemd user service and the timer that fires it:
 
 ```ini
 # ~/.config/systemd/user/standup-morning.service
@@ -186,15 +174,11 @@ WantedBy=timers.target
 systemctl --user enable --now standup-morning.timer
 ```
 
-`launch` never closes the tab it created, so the session is still sitting in its pane — with the
-skill run behind it — when you get to the machine. The unit's own exit status is the startup
-verdict: the launch JSON goes to the journal, and a startup that could not be verified fails the
-unit rather than leaving a silent pane.
+`launch` never closes the tab it created, so the session is still sitting in its pane — with the skill run behind it — when you get to the machine. The unit's own exit status is the startup verdict: the launch JSON goes to the journal, and a startup that could not be verified fails the unit rather than leaving a silent pane.
 
 ### Have a running session start another one and run a skill
 
-An agent that has read `h2cv --help` can open a pane, start a session in it, and hand that session a
-skill to run, all from one prompt.
+An agent that has read `h2cv --help` can open a pane, start a session in it, and hand that session a skill to run, all from one prompt.
 
 ```bash
 claude -p '
@@ -205,10 +189,7 @@ claude -p '
 
 ## Documentation
 
-`h2cv --help` is the machine-readable catalog of every command, including the two this page does not
-cover: `wait-input-ready` (wait until a pane can take input, without sending anything; it takes the
-same `--pane` / `--agent-name` pair as `send`) and `self-send` (a send whose target is the caller's
-own pane). `h2cv explain` without arguments lists the topics.
+`h2cv --help` is the machine-readable catalog of every command, including the two this page does not cover: `wait-input-ready` (wait until a pane can take input, without sending anything; it takes the same `--pane` / `--agent-name` pair as `send`) and `self-send` (a send whose target is the caller's own pane). `h2cv explain` without arguments lists the topics.
 
 ## Development
 
@@ -219,8 +200,7 @@ npm run typecheck # tsc --noEmit over src and bin
 npm run build     # emit dist/
 ```
 
-`smoke.test.ts` drives the real `claude` and `herdr` binaries, so it is skipped unless `EXTERNAL` is
-set in the environment.
+`smoke.test.ts` drives the real `claude` and `herdr` binaries, so it is skipped unless `EXTERNAL` is set in the environment.
 
 ## License
 
