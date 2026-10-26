@@ -580,14 +580,14 @@ export const LAUNCH_STAGES = [
     kind: "act+verify",
     observes: ["herdr-agent-status", "claude-screen"],
     predicate:
-      "the frozen workspace-trust wording is absent from the visible frame, and then agent_status is not blocked (primary) with the remaining frozen dialog wording absent (fallback). If the trust wording is there nothing is pressed; if only the rest is false, press Enter",
+      "the frozen workspace-trust wording is absent from the visible frame, and then agent_status is not blocked (primary) with the remaining frozen dialog wording absent (fallback). If the trust wording is there nothing is pressed; if the frozen MCP wording is there, press esc (reject the MCP servers); if only blocked is true, press Enter",
     maxAttempts: `${INTERSTITIAL_MAX_ENTERS}, and 0 for workspace trust`,
     interval: budget("interstitialSettleMs"),
     timeout: budget("inputReadyTimeoutMs"),
     onLimit:
       "fail-closed: untrusted-workspace for workspace trust, decided on the wording rather than on a limit. Otherwise fail-open: defer to the next gates (what was observed stays in the trace as a dialog row)",
     advice:
-      "untrusted-workspace means the session is up and untouched, and firing again unchanged will stop in the same place: read message, grant trust, then fire again. Otherwise the dialog does not clear on Enter, or it is classified as neither blocked nor a frozen value — escalate to a human and compare detection against the real screen",
+      "untrusted-workspace means the session is up and untouched, and firing again unchanged will stop in the same place: read message, grant trust, then fire again. Otherwise the dialog does not clear on esc / Enter, or it is classified as neither blocked nor a frozen value — escalate to a human and compare detection against the real screen",
     defends: ["P5", "P27", "P33"],
   },
   {

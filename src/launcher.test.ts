@@ -136,13 +136,13 @@ describe("AgentLauncher.waitReadiness", () => {
       trace: [{ stage: "agent", result: "gone", ms: expect.any(Number) }],
     });
   });
-  it("fresh 経路では interstitial 検出が有効 (ダイアログを Enter で通す #1783)", () => {
+  it("fresh 経路では interstitial 検出が有効 (MCP ダイアログを esc で通す #1783 / #4097)", () => {
     let visibles = 0;
     const herdr = readinessHerdr({
       visible: () =>
         ++visibles === 1 ? "New MCP server found in this project: probe" : "",
     });
     expect(launcher(herdr).waitReadiness(PANE)).toMatchObject({ ok: true });
-    expect(herdr.agentSendKeys).toHaveBeenCalledWith(PANE, "Enter");
+    expect(herdr.agentSendKeys).toHaveBeenCalledWith(PANE, "esc");
   });
 });

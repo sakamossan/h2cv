@@ -309,14 +309,15 @@ export function inputReadyGate(
       add("dialog", roundStartedAt);
       return fail("dialog", "untrusted-workspace");
     }
+    const mcpDialog = INTERSTITIAL_RE.test(visible);
     if (
       detectInterstitial &&
       interstitialEnters < INTERSTITIAL_MAX_ENTERS &&
-      (isBlocked(herdr, target) || INTERSTITIAL_RE.test(visible))
+      (isBlocked(herdr, target) || mcpDialog)
     ) {
       sawDialog = true;
       stage = "dialog";
-      herdr.agentSendKeys(target, "Enter");
+      herdr.agentSendKeys(target, mcpDialog ? "esc" : "Enter");
       interstitialEnters++;
       sleepSync(timings.interstitialSettleMs);
       add("dialog", roundStartedAt);

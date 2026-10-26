@@ -932,9 +932,10 @@ describe("inputReadyGate", () => {
       "  MCP servers may execute code or access system resources. All tool calls",
       "  require approval. Learn more in the MCP documentation.",
       "",
-      "  ❯ [✔] context7",
-      "    [✔] deepwiki",
-      " Space to select · Enter to confirm · Esc to reject all",
+      "  ❯ [✔] h2cvdummya",
+      "    [✔] h2cvdummyb",
+      "       Enable selected",
+      " Space to select · Esc to reject all",
     ].join("\n");
     const TRUST_DIALOG = [
       "",
@@ -955,13 +956,14 @@ describe("inputReadyGate", () => {
       "",
       " Enter to confirm · Esc to cancel",
     ].join("\n");
-    it("ダイアログが出ていれば Enter で通してから関門を通す", () => {
+    it("MCP ダイアログが出ていれば esc で拒否してから関門を通す", () => {
       let visibles = 0;
       const herdr = gateHerdr({
         visible: () => (++visibles === 1 ? MCP_DIALOG : ""),
       });
       expect(gate(herdr)).toMatchObject({ ok: true });
-      expect(herdr.agentSendKeys).toHaveBeenCalledWith(PANE, "Enter");
+      expect(herdr.agentSendKeys).toHaveBeenCalledWith(PANE, "esc");
+      expect(herdr.agentSendKeys).not.toHaveBeenCalledWith(PANE, "Enter");
     });
     it("workspace trust ダイアログ (実機ダンプ) は Enter を撃たずに畳む", () => {
       const herdr = gateHerdr({ visible: () => TRUST_DIALOG });
@@ -995,13 +997,24 @@ describe("inputReadyGate", () => {
       });
       expect(herdr.agentSendKeys).not.toHaveBeenCalled();
     });
-    it("MCP 複数ダイアログ (2.1.226 実機ダンプ) も Enter 1 回で通過する", () => {
+    it("MCP 複数ダイアログ (2.1.310 実機ダンプ) も esc 1 回で通過する", () => {
       let visibles = 0;
       const herdr = gateHerdr({
         visible: () => (++visibles === 1 ? MCP_DIALOG_MULTI : ""),
       });
       expect(gate(herdr)).toMatchObject({ ok: true });
       expect(herdr.agentSendKeys).toHaveBeenCalledTimes(1);
+      expect(herdr.agentSendKeys).toHaveBeenCalledWith(PANE, "esc");
+    });
+    it("blocked と分類された MCP 単数にも Enter ではなく esc を送る", () => {
+      let visibles = 0;
+      const herdr = gateHerdr({
+        visible: () => (++visibles === 1 ? MCP_DIALOG : ""),
+        status: () => (visibles === 1 ? "blocked" : "idle"),
+      });
+      expect(gate(herdr)).toMatchObject({ ok: true });
+      expect(herdr.agentSendKeys).toHaveBeenCalledTimes(1);
+      expect(herdr.agentSendKeys).toHaveBeenCalledWith(PANE, "esc");
     });
     it("凍結文言に一致しなくても agent_status が blocked なら Enter で通す", () => {
       let rounds = 0;
@@ -1027,7 +1040,7 @@ describe("inputReadyGate", () => {
         INTERSTITIAL_MAX_ENTERS,
       );
     });
-    it("後の周で描かれたダイアログも Enter で通過する", () => {
+    it("後の周で描かれたダイアログも esc で通過する", () => {
       let visibles = 0;
       const herdr = gateHerdr({
         box: () => (visibles <= 1 ? null : ""),
@@ -1036,7 +1049,7 @@ describe("inputReadyGate", () => {
       expect(gate(herdr)).toMatchObject({ ok: true });
       expect(herdr.agentSendKeys).toHaveBeenCalledTimes(1);
     });
-    it("Enter 上限を超えたら撃つのをやめ、box / RC が通れば通す (fail-open)", () => {
+    it("キー上限を超えたら撃つのをやめ、box / RC が通れば通す (fail-open)", () => {
       const herdr = gateHerdr({ visible: () => MCP_DIALOG });
       expect(gate(herdr)).toMatchObject({ ok: true });
       expect(herdr.agentSendKeys).toHaveBeenCalledTimes(
@@ -1066,7 +1079,7 @@ describe("inputReadyGate", () => {
       ]) {
         const herdr = gateHerdr({ visible: () => line });
         gate(herdr);
-        expect(herdr.agentSendKeys, line).toHaveBeenCalledWith(PANE, "Enter");
+        expect(herdr.agentSendKeys, line).toHaveBeenCalledWith(PANE, "esc");
       }
     });
     it("trust 側の実文言はどちらの行でも撃たずに畳む (凍結値の追従確認)", () => {
