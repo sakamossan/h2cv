@@ -265,8 +265,8 @@ export const PROBE_UNAVAILABLE_MESSAGE =
   " not be answered. Either the running herdr is older than the subcommand" +
   " (it landed in 0.8.2 and older builds print the usage and exit non-zero), or" +
   " the pane is gone / the server stopped answering. Check with `herdr status`" +
-  " and `herdr pane list`, upgrade herdr if it is behind the tested-with version" +
-  " (`h2cv explain overview` prints it), then fire again.";
+  " and `herdr pane list`, upgrade herdr if it is older than 0.8.2, then fire" +
+  " again.";
 export const AGENT_START_TIMEOUT_MS = 300000;
 const AGENT_PANE_BUSY = "agent_pane_busy";
 export const AGENT_START_RETRY_MS = 300;

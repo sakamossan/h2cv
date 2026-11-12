@@ -6,7 +6,6 @@ import { dirname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, test } from "vitest";
-import { TESTED_WITH } from "./explain.js";
 import { BACKGROUND_WORK_RULE_IDS } from "./sender.js";
 
 const exTest = test.skipIf(!process.env.EXTERNAL);
@@ -91,9 +90,6 @@ async function liveSessionNames(): Promise<string[]> {
   return Array.isArray(agents)
     ? agents.flatMap((a) => (a.name ? [a.name] : []))
     : [];
-}
-function versionOf(text: string): string {
-  return text.match(/\d+\.\d+\.\d+/)?.[0] ?? "";
 }
 const CLAUDE_CONFIG = join(homedir(), ".claude.json");
 async function trustedProjects(): Promise<Record<string, unknown>> {
@@ -190,6 +186,7 @@ async function makeUntrustedCwd(): Promise<string> {
 describe("h2cv 実機スモーク (EXTERNAL)", () => {
   beforeAll(async () => {
     if (!process.env.EXTERNAL) return;
+    if (process.env.H2CV_SMOKE_SKIP_BUILD === "1") return;
     const built = await capture("npm", ["run", "build"], {
       cwd: PKG_ROOT,
       timeoutMs: 300000,
@@ -199,54 +196,40 @@ describe("h2cv 実機スモーク (EXTERNAL)", () => {
       `dist のビルドに失敗した\n${built.stdout}\n${built.stderr}`,
     ).toBe(0);
   }, 300000);
-  exTest(
-    "実機の claude / herdr / manifest の版が TESTED_WITH と一致する",
-    async () => {
-      const [claude, herdr] = await Promise.all([
-        capture("claude", ["--version"]),
-        capture("herdr", ["--version"]),
+  exTest("BACKGROUND_WORK_RULE_IDS が実機の manifest に実在する", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "h2cv-smoke-manifest-"));
+    let manifest: string;
+    let ruleIds: string[];
+    try {
+      const fixture = join(dir, "screen.txt");
+      await writeFile(fixture, "hello\n", "utf8");
+      const explained = await capture("herdr", [
+        "agent",
+        "explain",
+        "--file",
+        fixture,
+        "--agent",
+        "claude",
+        "--json",
       ]);
-      expect(claude.code, claude.stderr).toBe(0);
-      expect(herdr.code, herdr.stderr).toBe(0);
-      const dir = await mkdtemp(join(tmpdir(), "h2cv-smoke-manifest-"));
-      let manifest: string;
-      let ruleIds: string[];
-      try {
-        const fixture = join(dir, "screen.txt");
-        await writeFile(fixture, "hello\n", "utf8");
-        const explained = await capture("herdr", [
-          "agent",
-          "explain",
-          "--file",
-          fixture,
-          "--agent",
-          "claude",
-          "--json",
-        ]);
-        expect(explained.code, explained.stderr).toBe(0);
-        const parsed = JSON.parse(explained.stdout);
-        manifest = String(parsed.manifest_version ?? "");
-        ruleIds = (parsed.evaluated_rules ?? []).map((r: { id: string }) =>
-          String(r.id),
-        );
-      } finally {
-        await rm(dir, { recursive: true, force: true });
-      }
-      expect({
-        claude: versionOf(claude.stdout),
-        herdr: versionOf(herdr.stdout),
-        manifest,
-      }).toEqual({ ...TESTED_WITH });
-      expect(
-        ruleIds.length,
-        "evaluated_rules が空 (manifest の読み方が変わった)",
-      ).toBeGreaterThan(0);
-      expect(
-        BACKGROUND_WORK_RULE_IDS.filter((id) => !ruleIds.includes(id)),
-        `BACKGROUND_WORK_RULE_IDS に manifest ${manifest} で実在しない id がある。上流がルールを落としたか改名した`,
-      ).toEqual([]);
-    },
-  );
+      expect(explained.code, explained.stderr).toBe(0);
+      const parsed = JSON.parse(explained.stdout);
+      manifest = String(parsed.manifest_version ?? "");
+      ruleIds = (parsed.evaluated_rules ?? []).map((r: { id: string }) =>
+        String(r.id),
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    expect(
+      ruleIds.length,
+      "evaluated_rules が空 (manifest の読み方が変わった)",
+    ).toBeGreaterThan(0);
+    expect(
+      BACKGROUND_WORK_RULE_IDS.filter((id) => !ruleIds.includes(id)),
+      `BACKGROUND_WORK_RULE_IDS に manifest ${manifest} で実在しない id がある。上流がルールを落としたか改名した`,
+    ).toEqual([]);
+  });
   exTest(
     "未 trust な cwd では Enter を撃たず untrusted-workspace で止まり、claude は生き残る",
     async () => {

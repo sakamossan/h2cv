@@ -12,7 +12,6 @@ import {
   PROVENANCE,
   resolveTopic,
   SEND_VERDICT_ADVICE,
-  TESTED_WITH,
   TOPICS,
   VERIFY_ADVICE,
 } from "./explain.js";
@@ -470,14 +469,5 @@ describe("パッケージのメタデータ", () => {
     const m = README.match(/^- Node\.js (\d+) or newer/m);
     expect(m, "README に Node.js の要件行が見つからない").not.toBeNull();
     expect(PKG.engines.node).toBe(`>=${m![1]}`);
-  });
-  it("tested-with 行が TESTED_WITH と一致する", () => {
-    const m = README.match(
-      /^Tested with claude (\S+) \/ herdr (\S+) \(agent detection manifest (\S+)\)\.$/m,
-    );
-    expect(m, "README に tested-with 行が見つからない").not.toBeNull();
-    expect({ claude: m![1], herdr: m![2], manifest: m![3] }).toEqual({
-      ...TESTED_WITH,
-    });
   });
 });

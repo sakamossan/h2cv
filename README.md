@@ -55,8 +55,6 @@ h2cv runs those checks deterministically and reports the state it observed. `h2c
 - A running herdr server (`herdr server`), kept resident by whatever means you prefer
   - h2cv only probes for liveness and fails with `server-down` when it is absent; it never starts the server for you. See `h2cv explain launch-sequence` for why the line is drawn there
 
-Tested with claude 2.1.319 / herdr 0.9.3 (agent detection manifest 2026.10.11.1).
-
 ## Install
 
 ```bash

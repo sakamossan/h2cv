@@ -248,11 +248,6 @@ const stagesById = (ids: readonly string[], from: readonly Stage[]) =>
 const LAUNCH_PIPELINE_STAGES = LAUNCH_STAGES.filter(
   (s) => !INPUT_READY_STAGE_IDS.includes(s.id as never),
 );
-export const TESTED_WITH = {
-  claude: "2.1.319",
-  herdr: "0.9.3",
-  manifest: "2026.10.11.1",
-} as const;
 export const TOPICS: Record<
   Topic,
   {
@@ -300,10 +295,10 @@ export const TOPICS: Record<
       "  menu eating Enter, the `/rc` status label, the dim placeholder and the first-run dialog",
       "  wording are hardcoded. They are not abstracted",
       "",
-      `tested-with: claude ${TESTED_WITH.claude} / herdr ${TESTED_WITH.herdr} (agent detection manifest ${TESTED_WITH.manifest}). The frozen`,
-      "values (first-run dialog wording, `/rc` label, box borders, the drawing convention for the",
-      "dim placeholder) were copied from the binaries and live dumps of those versions, so a new",
-      "claude version needs a follow-up. Version drift is handled as fail-open plus an observation",
+      "The frozen values (first-run dialog wording, `/rc` label, box borders, the drawing",
+      "convention for the dim placeholder) were copied from the claude / herdr binaries and live",
+      "dumps, and are verified by a smoke test against the real binaries rather than by pinning",
+      "versions. Version drift is handled as fail-open plus an observation",
       "(`detection`); it never stops the launch itself.",
       "",
       "herdr's agent detection manifest moves independently of the binary and does not stop",
@@ -530,8 +525,8 @@ export const TOPICS: Record<
       "all. Granting MCP servers is not this layer's call either. A blocked screen that matches no",
       "frozen value still gets Enter. Detection for them is primarily herdr's",
       "agent_status == blocked, with the frozen values",
-      "(INTERSTITIAL_RE) kept as a fallback for dialogs that stay classified as idle. Measured on",
-      `claude ${TESTED_WITH.claude} / herdr ${TESTED_WITH.herdr} (manifest ${TESTED_WITH.manifest}), two of the three`,
+      "(INTERSTITIAL_RE) kept as a fallback for dialogs that stay classified as idle. As measured,",
+      "two of the three",
       "first-run dialogs — workspace trust and the single-MCP one — report blocked (their footer",
       "`Enter to confirm · Esc to cancel` matches the live_blocked_form rule) and agent start",
       "returns agent_not_ready for them. The multi-MCP one stays idle with matched_rule null,",
