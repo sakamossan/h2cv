@@ -28,6 +28,21 @@ export type LaunchReadinessResult =
       paneTail?: string;
       detection?: ScreenDetection | null;
     };
+export type LauncherStartResult =
+  | Extract<
+      AgentStartResult,
+      {
+        ok: true;
+      }
+    >
+  | (Extract<
+      AgentStartResult,
+      {
+        ok: false;
+      }
+    > & {
+      paneTail: string;
+    });
 export type ShellGateResult =
   | {
       ok: true;
@@ -97,8 +112,14 @@ export class AgentLauncher {
       if (Date.now() >= deadline) return fail("timeout", probes);
     }
   }
-  start(name: string, paneId: string, claudeArgs: string[]): AgentStartResult {
-    return this.herdr.agentStart(name, paneId, claudeArgs);
+  start(
+    name: string,
+    paneId: string,
+    claudeArgs: string[],
+  ): LauncherStartResult {
+    const started = this.herdr.agentStart(name, paneId, claudeArgs);
+    if (started.ok) return started;
+    return { ...started, paneTail: this.herdr.paneReadTail(paneId) };
   }
   waitReadiness(paneId: string): LaunchReadinessResult {
     const timeoutMs = this.timings.inputReadyTimeoutMs;

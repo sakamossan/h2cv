@@ -1,0 +1,51 @@
+# Stage a release on npm when a release branch is pushed.
+#
+# The staged version is not public until a maintainer approves it on npmjs.com
+# (or with `npm stage approve`), which requires npm 2FA. Pushing to GitHub alone
+# can never publish a version.
+#
+# Authentication uses npm trusted publishing (OIDC), so no npm token is stored
+# in this repository. The trusted publisher for this workflow is registered with
+# stage-only permission.
+#
+# A version can be staged only once. Pushing again to the same release branch
+# makes the second run fail; create a new release branch for a new version.
+name: stage-h2cv
+
+on:
+  push:
+    branches: ["release/v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Staged publishing requires npm CLI 11.15.0 or later.
+      - run: npm install -g npm@^11.15.0
+
+      - name: Check that the branch name matches package.json
+        run: |
+          branch_version="${GITHUB_REF_NAME#release/v}"
+          package_version="$(node -p 'require("./package.json").version')"
+          if [ "$branch_version" != "$package_version" ]; then
+            echo "branch $GITHUB_REF_NAME does not match package.json version $package_version" >&2
+            exit 1
+          fi
+
+      # No package-lock.json is committed here, so do not let install write one.
+      - run: npm install --no-package-lock --no-audit --no-fund
+      - run: npm run build
+      - run: test -f dist/bin/h2cv.js
+
+      - run: npm stage publish
