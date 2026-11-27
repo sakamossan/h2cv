@@ -538,7 +538,7 @@ export const LAUNCH_STAGES = [
     interval: budget("AGENT_START_RETRY_MS"),
     timeout: NONE,
     onLimit:
-      "fail-closed: start-failed. agent_not_ready is fail-open: a start / fail-open row in the trace. The start row carries busyRetries (re-runs on agent_pane_busy) on success and failure alike",
+      "fail-closed: start-failed (paneTail is attached). agent_not_ready is fail-open: a start / fail-open row in the trace. The start row carries busyRetries (re-runs on agent_pane_busy) on success and failure alike",
     advice:
       "Read the upstream message in stderr. An invalid argv or an invalid agent name lands here, and neither is fixed by firing again unchanged",
     defends: ["P15", "P16", "P17"],

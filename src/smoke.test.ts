@@ -64,6 +64,12 @@ async function h2cv(args: string[]): Promise<
   }
   return { ...r, json };
 }
+function launchedMessage(launched: {
+  stderr: string;
+  json: Record<string, unknown>;
+}): string {
+  return `${launched.stderr}\n--- json ---\n${JSON.stringify(launched.json, null, 2)}`;
+}
 async function closeTabByLabel(label: string): Promise<void> {
   const ids = async () => {
     const r = await capture("herdr", ["tab", "list"]);
@@ -248,7 +254,7 @@ describe("h2cv 実機スモーク (EXTERNAL)", () => {
           "-n",
           agentName,
         ]);
-        expect(launched.json, launched.stderr).toMatchObject({
+        expect(launched.json, launchedMessage(launched)).toMatchObject({
           ok: false,
           error: "untrusted-workspace",
           stage: "dialog",
@@ -308,7 +314,7 @@ describe("h2cv 実機スモーク (EXTERNAL)", () => {
           "-n",
           agentName,
         ]);
-        expect(launched.json, launched.stderr).toMatchObject({
+        expect(launched.json, launchedMessage(launched)).toMatchObject({
           ok: true,
           agentName,
           promptSent: true,
@@ -358,7 +364,7 @@ describe("h2cv 実機スモーク (EXTERNAL)", () => {
           "-n",
           agentName,
         ]);
-        expect(launched.json, launched.stderr).toMatchObject({
+        expect(launched.json, launchedMessage(launched)).toMatchObject({
           ok: true,
           agentName,
           promptSent: true,

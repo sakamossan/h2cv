@@ -365,10 +365,16 @@ describe("runLaunch", () => {
   it("起動の失敗は start-failed", () => {
     const herdr = fakeHerdrPort({
       agentStart: () => ({ ok: false, stderr: "boom", busyRetries: 1 }),
+      paneReadTail: () => "Quick safety check",
     });
     expect(runLaunch(REQ, deps(herdr))).toMatchObject({
       ok: false,
-      failure: { error: "start-failed", stage: "start", stderr: "boom" },
+      failure: {
+        error: "start-failed",
+        stage: "start",
+        stderr: "boom",
+        paneTail: "Quick safety check",
+      },
     });
   });
   it("起動したはずの agent が消えていれば agent-vanished (#2507 で統合)", () => {

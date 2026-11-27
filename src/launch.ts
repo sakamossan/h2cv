@@ -141,6 +141,7 @@ export function runLaunch(req: LaunchRequest, deps: LaunchDeps): LaunchResult {
     return fail("start-failed", "start", {
       agentName,
       stderr: start.stderr,
+      paneTail: start.paneTail,
       trace,
     });
   }

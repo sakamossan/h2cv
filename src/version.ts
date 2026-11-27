@@ -1,1 +1,1 @@
-export const H2CV_VERSION = "0.5.8";
+export const H2CV_VERSION = "0.5.9";
